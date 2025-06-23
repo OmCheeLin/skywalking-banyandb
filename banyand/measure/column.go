@@ -154,9 +154,14 @@ func encodeColumnValues(cm *columnMetadata, bb *bytes.Buffer, c *column) {
 				return
 			}
 			if len(v) != 8 {
-				logger.Panicf("malformed value at index %d: expected length 8, got %d", i, len(v))
+				var val int64
+				for j := 0; j < len(v); j++ {
+					val = (val << 8) | int64(v[j])
+				}
+				intValues[i] = val
+			} else {
+				intValues[i] = convert.BytesToInt64(v)
 			}
-			intValues[i] = convert.BytesToInt64(v)
 		}
 		// use delta encoding for integer column
 		var encodeType encoding.EncodeType
