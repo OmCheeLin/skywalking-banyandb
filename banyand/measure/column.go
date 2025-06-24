@@ -123,7 +123,7 @@ func (c *column) mustWriteTo(cm *columnMetadata, columnWriter *writer) {
 	bb := bigValuePool.Generate()
 	defer bigValuePool.Release(bb)
 
-	encodeColumnValues(cm, bb, c)
+	c.encodeColumnValues(cm, bb)
 	cm.size = uint64(len(bb.Buf))
 	if cm.size > maxValuesBlockSize {
 		logger.Panicf("too large valuesSize: %d bytes; mustn't exceed %d bytes", cm.size, maxValuesBlockSize)
@@ -132,7 +132,7 @@ func (c *column) mustWriteTo(cm *columnMetadata, columnWriter *writer) {
 	columnWriter.MustWrite(bb.Buf)
 }
 
-func encodeColumnValues(cm *columnMetadata, bb *bytes.Buffer, c *column) {
+func (c *column) encodeColumnValues(cm *columnMetadata, bb *bytes.Buffer) {
 	encodeDefault := func() {
 		bb.Buf = encoding.EncodeBytesBlock(bb.Buf[:0], c.values)
 	}
@@ -167,11 +167,15 @@ func encodeColumnValues(cm *columnMetadata, bb *bytes.Buffer, c *column) {
 		var encodeType encoding.EncodeType
 		var firstValue int64
 		bb.Buf, encodeType, firstValue = encoding.Int64ListToBytes(bb.Buf[:0], intValues)
-		cm.encodeType = encodeType
-		cm.firstValue = firstValue
-		if cm.encodeType == encoding.EncodeTypeUnknown {
+		if encodeType == encoding.EncodeTypeUnknown {
 			logger.Panicf("invalid encode type for int64 values")
 		}
+		firstValueBytes := convert.Int64ToBytes(firstValue)
+		// Prepend encodeType (1 byte) and firstValue (8 bytes) to the beginning
+		bb.Buf = append(
+			append([]byte{byte(encodeType)}, firstValueBytes...),
+			bb.Buf...,
+		)
 	case pbv1.ValueTypeFloat64:
 		// convert byte array to float64 array
 		floatValuesPtr := generateFloat64Slice(len(c.values))
@@ -215,7 +219,7 @@ func (c *column) mustReadValues(decoder *encoding.BytesBlockDecoder, reader fs.R
 	}
 	bb.Buf = bytes.ResizeOver(bb.Buf, int(valuesSize))
 	fs.MustReadData(reader, int64(cm.offset), bb.Buf)
-	decodeColumnValues(decoder, reader.Path(), cm, count, c, bb)
+	c.decodeColumnValues(decoder, reader.Path(), count, bb)
 }
 
 func (c *column) mustSeqReadValues(decoder *encoding.BytesBlockDecoder, reader *seqReader, cm columnMetadata, count uint64) {
@@ -234,10 +238,10 @@ func (c *column) mustSeqReadValues(decoder *encoding.BytesBlockDecoder, reader *
 
 	bb.Buf = bytes.ResizeOver(bb.Buf, int(valuesSize))
 	reader.mustReadFull(bb.Buf)
-	decodeColumnValues(decoder, reader.Path(), cm, count, c, bb)
+	c.decodeColumnValues(decoder, reader.Path(), count, bb)
 }
 
-func decodeColumnValues(decoder *encoding.BytesBlockDecoder, path string, cm columnMetadata, count uint64, c *column, bb *bytes.Buffer) {
+func (c *column) decodeColumnValues(decoder *encoding.BytesBlockDecoder, path string, count uint64, bb *bytes.Buffer) {
 	switch c.valueType {
 	case pbv1.ValueTypeInt64:
 		// decode integer type
@@ -247,8 +251,15 @@ func decodeColumnValues(decoder *encoding.BytesBlockDecoder, path string, cm col
 			releaseInt64Slice(intValuesPtr)
 		}()
 
+		const expectedLen = 9
+		if len(bb.Buf) < expectedLen {
+			logger.Panicf("bb.Buf length too short: expect at least %d bytes, but got %d bytes", expectedLen, len(bb.Buf))
+		}
+		encodeType := encoding.EncodeType(bb.Buf[0])
+		firstValue := convert.BytesToInt64(bb.Buf[1:9])
+		bb.Buf = bb.Buf[9:]
 		var err error
-		intValues, err = encoding.BytesToInt64List(intValues[:0], bb.Buf, cm.encodeType, cm.firstValue, int(count))
+		intValues, err = encoding.BytesToInt64List(intValues[:0], bb.Buf, encodeType, firstValue, int(count))
 		if err != nil {
 			logger.Panicf("%s: cannot decode int values: %v", path, err)
 		}
