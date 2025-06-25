@@ -19,12 +19,12 @@ package measure
 
 import (
 	"fmt"
-	"github.com/apache/skywalking-banyandb/pkg/convert"
 	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/apache/skywalking-banyandb/pkg/bytes"
+	"github.com/apache/skywalking-banyandb/pkg/convert"
 	"github.com/apache/skywalking-banyandb/pkg/encoding"
 	pbv1 "github.com/apache/skywalking-banyandb/pkg/pb/v1"
 )
@@ -51,11 +51,11 @@ func benchmarkColumnEncoding[T any](
 
 			benchCases := []struct {
 				label     string
-				valueType pbv1.ValueType
 				values    [][]byte
+				valueType pbv1.ValueType
 			}{
-				{"old_str", pbv1.ValueTypeStr, oldBytes},
-				{fmt.Sprintf("new_%s", dataTypeName), valueType, newBytes},
+				{"old_str", oldBytes, pbv1.ValueTypeStr},
+				{fmt.Sprintf("new_%s", dataTypeName), newBytes, valueType},
 			}
 
 			for _, bc := range benchCases {
@@ -115,6 +115,7 @@ func benchmarkColumnEncoding[T any](
 	}
 }
 
+// #nosec G404
 func generateDataFloat64(name string, n int) []float64 {
 	switch name {
 	case "const":
@@ -144,6 +145,7 @@ func generateDataFloat64(name string, n int) []float64 {
 	}
 }
 
+// #nosec G404
 func generateDataInt64(name string, n int) []int64 {
 	switch name {
 	case "const":
