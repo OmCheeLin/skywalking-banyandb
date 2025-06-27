@@ -69,16 +69,14 @@ func TestFloat64ListToDecimalIntListAndBack(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ints := make([]int64, len(tt.input))
-			ints, exp, err := Float64ListToDecimalIntList(ints, tt.input)
+			ints, exp, err := Float64ListToDecimalIntList(nil, tt.input)
 			if tt.expectErr {
 				assert.Error(t, err)
 				return
 			}
 			assert.NoError(t, err)
 
-			floats := make([]float64, len(ints))
-			floats, err = DecimalIntListToFloat64List(floats, ints, exp, len(ints))
+			floats, err := DecimalIntListToFloat64List(nil, ints, exp, len(ints))
 			if err != nil && !tt.expectErr {
 				t.Errorf("unexpected error in DecimalIntListToFloat64List: %v", err)
 				return
