@@ -18,9 +18,10 @@
 package encoding
 
 import (
-	"github.com/stretchr/testify/assert"
 	"math"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestFloat64ListToDecimalIntListAndBack(t *testing.T) {
@@ -68,7 +69,8 @@ func TestFloat64ListToDecimalIntListAndBack(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ints, exp, err := Float64ListToDecimalIntList(tt.input)
+			ints := make([]int64, len(tt.input))
+			ints, exp, err := Float64ListToDecimalIntList(ints, tt.input)
 			if tt.expectErr {
 				assert.Error(t, err)
 				return
@@ -76,7 +78,8 @@ func TestFloat64ListToDecimalIntListAndBack(t *testing.T) {
 				assert.NoError(t, err)
 			}
 
-			floats, err := DecimalIntListToFloat64List(ints, exp)
+			floats := make([]float64, len(ints))
+			floats, err = DecimalIntListToFloat64List(floats, ints, exp, len(ints))
 			if err != nil && !tt.expectErr {
 				t.Errorf("unexpected error in DecimalIntListToFloat64List: %v", err)
 				return
@@ -91,6 +94,6 @@ func TestFloat64ListToDecimalIntListAndBack(t *testing.T) {
 
 func TestEmptyInputPanics(t *testing.T) {
 	assert.Panics(t, func() {
-		_, _, _ = Float64ListToDecimalIntList([]float64{})
+		_, _, _ = Float64ListToDecimalIntList([]int64{}, []float64{})
 	})
 }

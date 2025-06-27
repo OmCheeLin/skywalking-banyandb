@@ -160,6 +160,11 @@ func (c *column) encodeColumnValues(cm *columnMetadata, bb *bytes.Buffer) {
 		)
 	case pbv1.ValueTypeFloat64:
 		// convert byte array to float64 array
+		intValuesPtr := generateInt64Slice(len(c.values))
+		intValues := *intValuesPtr
+		defer func() {
+			releaseInt64Slice(intValuesPtr)
+		}()
 		floatValuesPtr := generateFloat64Slice(len(c.values))
 		floatValues := *floatValuesPtr
 		defer func() {
@@ -169,7 +174,7 @@ func (c *column) encodeColumnValues(cm *columnMetadata, bb *bytes.Buffer) {
 		for i, v := range c.values {
 			floatValues[i] = convert.BytesToFloat64(v)
 		}
-		int64s, exp, err := encoding.Float64ListToDecimalIntList(floatValues)
+		intValues, exp, err := encoding.Float64ListToDecimalIntList(intValues[:0], floatValues)
 		if err != nil {
 			if exp == -1 {
 				// TODO c.valueType = pbv1.ValueTypeStr
@@ -181,7 +186,7 @@ func (c *column) encodeColumnValues(cm *columnMetadata, bb *bytes.Buffer) {
 		}
 		var encodeType encoding.EncodeType
 		var firstValue int64
-		bb.Buf, encodeType, firstValue = encoding.Int64ListToBytes(bb.Buf[:0], int64s)
+		bb.Buf, encodeType, firstValue = encoding.Int64ListToBytes(bb.Buf[:0], intValues)
 		if encodeType == encoding.EncodeTypeUnknown {
 			logger.Panicf("invalid encode type for int64 values")
 		}
@@ -271,7 +276,7 @@ func (c *column) decodeColumnValues(decoder *encoding.BytesBlockDecoder, path st
 		defer func() {
 			releaseInt64Slice(intValuesPtr)
 		}()
-		floatValuesPtr := generateFloat64Slice(len(c.values))
+		floatValuesPtr := generateFloat64Slice(int(count))
 		floatValues := *floatValuesPtr
 		defer func() {
 			releaseFloat64Slice(floatValuesPtr)
@@ -290,7 +295,7 @@ func (c *column) decodeColumnValues(decoder *encoding.BytesBlockDecoder, path st
 		if err != nil {
 			logger.Panicf("%s: cannot decode int values: %v", path, err)
 		}
-		floatValues, err = encoding.DecimalIntListToFloat64List(intValues, exp)
+		floatValues, err = encoding.DecimalIntListToFloat64List(floatValues[:0], intValues, exp, int(count))
 		if err != nil {
 			logger.Panicf("cannot convert DecimalIntList to Float64List: %v", err)
 		}

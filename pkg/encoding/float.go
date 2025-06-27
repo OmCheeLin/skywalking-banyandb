@@ -20,12 +20,14 @@ package encoding
 import (
 	"fmt"
 	"math"
+
+	"github.com/apache/skywalking-banyandb/pkg/logger"
 )
 
 // Float64ListToDecimalIntList converts float64 values to int64s with a common decimal scale factor.
-func Float64ListToDecimalIntList(nums []float64) ([]int64, int32, error) {
+func Float64ListToDecimalIntList(dst []int64, nums []float64) ([]int64, int32, error) {
 	if len(nums) == 0 {
-		return nil, 0, fmt.Errorf("nums must contain at least one item")
+		logger.Panicf("a must contain at least one item")
 	}
 
 	// Maximum allowed decimal places for float64 safety
@@ -44,31 +46,31 @@ func Float64ListToDecimalIntList(nums []float64) ([]int64, int32, error) {
 	}
 
 	scale := math.Pow10(int(maxPlaces))
-	values := make([]int64, len(nums))
-	for i, f := range nums {
+	for _, f := range nums {
 		scaled := f * scale
 		rounded := math.Round(scaled)
 		if rounded > math.MaxInt64 || rounded < math.MinInt64 {
 			// // -1 and err represents an overflow condition
 			return nil, -1, fmt.Errorf("value %f overflows int64", rounded)
 		}
-		values[i] = int64(rounded)
+		dst = append(dst, int64(rounded))
 	}
 
-	return values, -maxPlaces, nil
+	return dst, -maxPlaces, nil
 }
 
 // DecimalIntListToFloat64List restores float64 values from scaled int64s using a decimal exponent.
-func DecimalIntListToFloat64List(values []int64, exponent int32) ([]float64, error) {
+func DecimalIntListToFloat64List(dst []float64, values []int64, exponent int32, itemsCount int) ([]float64, error) {
+	dst = ExtendListCapacity(dst, itemsCount)
+
 	if len(values) == 0 {
-		return nil, nil
+		return dst[:0], nil
 	}
 	scale := math.Pow10(int(-exponent))
-	floats := make([]float64, len(values))
-	for i, v := range values {
-		floats[i] = float64(v) / scale
+	for _, v := range values {
+		dst = append(dst, float64(v)/scale)
 	}
-	return floats, nil
+	return dst, nil
 }
 
 // countDecimalPlaces estimates the number of decimal places in a float64 up to a given maximum.
