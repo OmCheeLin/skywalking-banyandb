@@ -74,9 +74,8 @@ func TestFloat64ListToDecimalIntListAndBack(t *testing.T) {
 			if tt.expectErr {
 				assert.Error(t, err)
 				return
-			} else {
-				assert.NoError(t, err)
 			}
+			assert.NoError(t, err)
 
 			floats := make([]float64, len(ints))
 			floats, err = DecimalIntListToFloat64List(floats, ints, exp, len(ints))

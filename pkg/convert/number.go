@@ -95,10 +95,8 @@ func BytesToInt32(b []byte) int32 {
 	if (u >> 31) == 1 {
 		// Positive number
 		return int32(u &^ (1 << 31)) // clear the sign bit
-	} else {
-		// Negative number
-		return -int32((1 << 31) - u)
 	}
+	return -int32((1 << 31) - u)
 }
 
 // BytesToUint64 converts bytes to uint64.

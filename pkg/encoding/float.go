@@ -32,7 +32,7 @@ func Float64ListToDecimalIntList(dst []int64, nums []float64) ([]int64, int32, e
 
 	// Maximum allowed decimal places for float64 safety
 	const maxDecimalPlaces = 15
-	var maxPlaces int32 = 0
+	var maxPlaces int32
 
 	// Determine the maximum number of decimal places needed
 	for _, f := range nums {
