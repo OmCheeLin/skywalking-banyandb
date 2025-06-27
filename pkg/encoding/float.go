@@ -74,12 +74,12 @@ func DecimalIntListToFloat64List(dst []float64, values []int64, exponent int32, 
 }
 
 // countDecimalPlaces estimates the number of decimal places in a float64 up to a given maximum.
-func countDecimalPlaces(f float64, max int) int32 {
-	for i := 0; i < max; i++ {
+func countDecimalPlaces(f float64, maxPlace int) int32 {
+	for i := 0; i < maxPlace; i++ {
 		f *= 10
 		if math.Abs(f-math.Round(f)) < 1e-9 {
 			return int32(i + 1)
 		}
 	}
-	return int32(max)
+	return int32(maxPlace)
 }
