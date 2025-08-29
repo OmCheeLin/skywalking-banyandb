@@ -22,6 +22,11 @@ package sidx
 import (
 	"fmt"
 
+	"github.com/apache/skywalking-banyandb/api/common"
+	internalencoding "github.com/apache/skywalking-banyandb/banyand/internal/encoding"
+	"github.com/apache/skywalking-banyandb/pkg/bytes"
+	"github.com/apache/skywalking-banyandb/pkg/compress/zstd"
+	"github.com/apache/skywalking-banyandb/pkg/encoding"
 	pbv1 "github.com/apache/skywalking-banyandb/pkg/pb/v1"
 	"github.com/apache/skywalking-banyandb/pkg/pool"
 )
@@ -37,13 +42,9 @@ type block struct {
 	// Tag data organized by tag name (pointer field - 8 bytes)
 	tags map[string]*tagData // Runtime tag data with filtering
 
-	// Core data arrays (all same length - pointer fields - 24 bytes total)
-	userKeys   []int64  // User-provided ordering keys
-	elementIDs []uint64 // Unique element identifiers
-	data       [][]byte // User payload data
-
-	// Internal state (bool field - 1 byte, padded to 8 bytes)
-	pooled bool // Whether this block came from pool
+	// Core data arrays (all same length - pointer fields)
+	userKeys []int64  // User-provided ordering keys
+	data     [][]byte // User payload data
 }
 
 var blockPool = pool.Register[*block]("sidx-block")
@@ -78,7 +79,6 @@ func releaseBlock(b *block) {
 // reset clears block for reuse in object pool.
 func (b *block) reset() {
 	b.userKeys = b.userKeys[:0]
-	b.elementIDs = b.elementIDs[:0]
 
 	for i := range b.data {
 		b.data[i] = b.data[i][:0]
@@ -89,48 +89,10 @@ func (b *block) reset() {
 	for k := range b.tags {
 		delete(b.tags, k)
 	}
-
-	b.pooled = false
-}
-
-// mustInitFromElements initializes block from sorted elements.
-func (b *block) mustInitFromElements(elems *elements) {
-	b.reset()
-	if elems.Len() == 0 {
-		return
-	}
-
-	// Verify elements are sorted
-	elems.assertSorted()
-
-	// Copy core data
-	b.userKeys = append(b.userKeys, elems.userKeys...)
-	b.elementIDs = make([]uint64, len(elems.userKeys))
-	for i := range b.elementIDs {
-		b.elementIDs[i] = uint64(i) // Generate sequential IDs
-	}
-	b.data = append(b.data, elems.data...)
-
-	// Process tags
-	b.mustInitFromTags(elems.tags)
-}
-
-// assertSorted verifies that elements are sorted correctly.
-func (e *elements) assertSorted() {
-	for i := 1; i < e.Len(); i++ {
-		if e.seriesIDs[i] < e.seriesIDs[i-1] {
-			panic(fmt.Sprintf("elements not sorted by seriesID: index %d (%d) < index %d (%d)",
-				i, e.seriesIDs[i], i-1, e.seriesIDs[i-1]))
-		}
-		if e.seriesIDs[i] == e.seriesIDs[i-1] && e.userKeys[i] < e.userKeys[i-1] {
-			panic(fmt.Sprintf("elements not sorted by userKey: index %d (%d) < index %d (%d) for seriesID %d",
-				i, e.userKeys[i], i-1, e.userKeys[i-1], e.seriesIDs[i]))
-		}
-	}
 }
 
 // mustInitFromTags processes tag data for the block.
-func (b *block) mustInitFromTags(elementTags [][]tag) {
+func (b *block) mustInitFromTags(elementTags [][]*tag) {
 	if len(elementTags) == 0 {
 		return
 	}
@@ -150,7 +112,7 @@ func (b *block) mustInitFromTags(elementTags [][]tag) {
 }
 
 // processTag creates tag data structure for a specific tag.
-func (b *block) processTag(tagName string, elementTags [][]tag) {
+func (b *block) processTag(tagName string, elementTags [][]*tag) {
 	td := generateTagData()
 	td.name = tagName
 	td.values = make([][]byte, len(b.userKeys))
@@ -199,9 +161,9 @@ func (b *block) processTag(tagName string, elementTags [][]tag) {
 // validate ensures block data consistency.
 func (b *block) validate() error {
 	count := len(b.userKeys)
-	if count != len(b.elementIDs) || count != len(b.data) {
-		return fmt.Errorf("inconsistent block arrays: keys=%d, ids=%d, data=%d",
-			len(b.userKeys), len(b.elementIDs), len(b.data))
+	if count != len(b.data) {
+		return fmt.Errorf("inconsistent block arrays: keys=%d, data=%d",
+			len(b.userKeys), len(b.data))
 	}
 
 	// Verify sorting by userKey
@@ -226,7 +188,7 @@ func (b *block) validate() error {
 // uncompressedSizeBytes calculates the uncompressed size of the block.
 func (b *block) uncompressedSizeBytes() uint64 {
 	count := uint64(len(b.userKeys))
-	size := count * (8 + 8) // userKey + elementID
+	size := count * 8 // userKey
 
 	// Add data payload sizes
 	for _, payload := range b.data {
@@ -267,4 +229,132 @@ func (b *block) getKeyRange() (int64, int64) {
 		return 0, 0
 	}
 	return b.userKeys[0], b.userKeys[len(b.userKeys)-1]
+}
+
+// mustWriteTo writes block data to files through the provided writers.
+// This method serializes the block's userKeys, data, and tags
+// to their respective files while updating the block metadata.
+func (b *block) mustWriteTo(sid common.SeriesID, bm *blockMetadata, ww *writers) {
+	if err := b.validate(); err != nil {
+		panic(fmt.Sprintf("block validation failed: %v", err))
+	}
+	bm.reset()
+
+	bm.seriesID = sid
+	bm.uncompressedSize = b.uncompressedSizeBytes()
+	bm.count = uint64(b.Len())
+
+	// Write user keys to keys.bin and capture encoding information
+	bm.keysEncodeType, bm.minKey = mustWriteKeysTo(&bm.keysBlock, b.userKeys, &ww.keysWriter)
+
+	// Write data payloads to data.bin
+	mustWriteDataTo(&bm.dataBlock, b.data, &ww.dataWriter)
+
+	// Write each tag to its respective files
+	for tagName, tagData := range b.tags {
+		b.mustWriteTag(tagName, tagData, bm, ww)
+	}
+}
+
+// mustWriteTag writes a single tag's data to its tag files.
+func (b *block) mustWriteTag(tagName string, td *tagData, bm *blockMetadata, ww *writers) {
+	tmw, tdw, tfw := ww.getWriters(tagName)
+
+	// Create tag metadata
+	tm := generateTagMetadata()
+	defer releaseTagMetadata(tm)
+
+	tm.name = tagName
+	tm.valueType = td.valueType
+	tm.indexed = td.indexed
+
+	// Write tag values to data file
+	bb := bigValuePool.Get()
+	if bb == nil {
+		bb = &bytes.Buffer{}
+	}
+	defer func() {
+		bb.Buf = bb.Buf[:0]
+		bigValuePool.Put(bb)
+	}()
+
+	// Encode tag values using the encoding module
+	err := internalencoding.EncodeTagValues(bb, td.values, td.valueType)
+	if err != nil {
+		panic(fmt.Sprintf("failed to encode tag values: %v", err))
+	}
+
+	// Write tag data without compression
+	tm.dataBlock.offset = tdw.bytesWritten
+	tm.dataBlock.size = uint64(len(bb.Buf))
+	tdw.MustWrite(bb.Buf)
+
+	// Write bloom filter if indexed
+	if td.indexed && td.filter != nil {
+		filterData := encodeBloomFilter(nil, td.filter)
+		tm.filterBlock.offset = tfw.bytesWritten
+		tm.filterBlock.size = uint64(len(filterData))
+		tfw.MustWrite(filterData)
+	}
+
+	// Set min/max for int64 tags
+	if td.valueType == pbv1.ValueTypeInt64 {
+		tm.min = td.min
+		tm.max = td.max
+	}
+
+	// Marshal and write tag metadata
+	bb.Buf = bb.Buf[:0]
+	bb.Buf = tm.marshalAppend(bb.Buf)
+	tmw.MustWrite(bb.Buf)
+
+	// Update block metadata
+	offset := tmw.bytesWritten - uint64(len(bb.Buf))
+	size := uint64(len(bb.Buf))
+	bm.setTagMetadata(tagName, offset, size)
+}
+
+// mustWriteKeysTo writes user keys to the keys writer and returns encoding metadata.
+func mustWriteKeysTo(kb *dataBlock, userKeys []int64, keysWriter *writer) (encoding.EncodeType, int64) {
+	bb := bigValuePool.Get()
+	if bb == nil {
+		bb = &bytes.Buffer{}
+	}
+	defer func() {
+		bb.Buf = bb.Buf[:0]
+		bigValuePool.Put(bb)
+	}()
+
+	// Encode user keys
+	var encodeType encoding.EncodeType
+	var firstValue int64
+	bb.Buf, encodeType, firstValue = encoding.Int64ListToBytes(bb.Buf[:0], userKeys)
+
+	// Write encoded data directly without compression
+	kb.offset = keysWriter.bytesWritten
+	kb.size = uint64(len(bb.Buf))
+	keysWriter.MustWrite(bb.Buf)
+
+	return encodeType, firstValue
+}
+
+// mustWriteDataTo writes data payloads to the data writer.
+func mustWriteDataTo(db *dataBlock, data [][]byte, dataWriter *writer) {
+	bb := bigValuePool.Get()
+	if bb == nil {
+		bb = &bytes.Buffer{}
+	}
+	defer func() {
+		bb.Buf = bb.Buf[:0]
+		bigValuePool.Put(bb)
+	}()
+
+	// Encode all data payloads as a block
+	bb.Buf = encoding.EncodeBytesBlock(bb.Buf[:0], data)
+
+	// Compress and write
+	compressedData := zstd.Compress(nil, bb.Buf, 1)
+	db.offset = dataWriter.bytesWritten
+	db.size = uint64(len(compressedData))
+	dataWriter.MustWrite(compressedData)
 }

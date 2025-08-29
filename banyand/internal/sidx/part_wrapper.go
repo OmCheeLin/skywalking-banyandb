@@ -73,11 +73,13 @@ type partWrapper struct {
 // newPartWrapper creates a new partWrapper with an initial reference count of 1.
 // The part starts in the active state.
 func newPartWrapper(p *part) *partWrapper {
-	return &partWrapper{
+	pw := &partWrapper{
 		p:     p,
 		ref:   1,
 		state: int32(partStateActive),
 	}
+
+	return pw
 }
 
 // acquire increments the reference count atomically.
@@ -202,6 +204,12 @@ func (pw *partWrapper) isRemoved() bool {
 	return atomic.LoadInt32(&pw.state) == int32(partStateRemoved)
 }
 
+// isMemPart returns true if this wrapper contains a memory part.
+func (pw *partWrapper) isMemPart() bool {
+	// A memory part typically has no file system path or is stored in memory
+	return pw.p != nil && pw.p.path == ""
+}
+
 // String returns a string representation of the partWrapper.
 func (pw *partWrapper) String() string {
 	state := pw.getState()
@@ -213,4 +221,38 @@ func (pw *partWrapper) String() string {
 
 	return fmt.Sprintf("partWrapper{id=%d, state=%s, ref=%d, path=%s}",
 		pw.ID(), state, refCount, pw.p.path)
+}
+
+// overlapsKeyRange checks if the part overlaps with the given key range.
+// Returns true if there is any overlap between the part's key range and the query range.
+// Uses part metadata to perform efficient range filtering without I/O.
+func (pw *partWrapper) overlapsKeyRange(minKey, maxKey int64) bool {
+	if pw.p == nil {
+		return false
+	}
+
+	// Validate input range
+	if minKey > maxKey {
+		return false
+	}
+
+	// Check if part metadata is available
+	if pw.p.partMetadata == nil {
+		// If no metadata available, assume overlap to be safe
+		// This ensures we don't skip parts that might contain relevant data
+		return true
+	}
+
+	pm := pw.p.partMetadata
+
+	// Check for non-overlapping ranges using De Morgan's law:
+	// Two ranges [a,b] and [c,d] don't overlap if: b < c OR a > d
+	// Therefore, they DO overlap if: NOT(b < c OR a > d) = (b >= c AND a <= d)
+	// Simplified: part.MaxKey >= query.MinKey AND part.MinKey <= query.MaxKey
+	if pm.MaxKey < minKey || pm.MinKey > maxKey {
+		return false
+	}
+
+	// Ranges overlap
+	return true
 }
