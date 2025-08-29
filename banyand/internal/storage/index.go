@@ -19,6 +19,7 @@ package storage
 
 import (
 	"context"
+	"encoding/binary"
 	"maps"
 	"path"
 
@@ -362,7 +363,16 @@ func (s *seriesIndex) SearchWithoutSeries(ctx context.Context, opts IndexSearchO
 		if len(opts.Projection) > 0 {
 			sd.Fields = append(sd.Fields, maps.Clone(val.Values))
 		}
-		sortedValues = append(sortedValues, val.SortedValue)
+
+		var sv []byte
+		if val.SortedValue != nil {
+			sv = val.SortedValue
+		} else {
+			tmp := make([]byte, 8)
+			binary.BigEndian.PutUint64(tmp, uint64(val.Timestamp))
+			sv = tmp
+		}
+		sortedValues = append(sortedValues, sv)
 	}
 	if span != nil {
 		span.Tagf("query", "%s", iter.Query().String())
