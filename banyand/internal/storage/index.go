@@ -19,13 +19,16 @@ package storage
 
 import (
 	"context"
+	"encoding/binary"
 	"maps"
 	"path"
+	"sort"
 
 	"github.com/pkg/errors"
 	"go.uber.org/multierr"
 
 	"github.com/apache/skywalking-banyandb/api/common"
+	modelv1 "github.com/apache/skywalking-banyandb/api/proto/banyandb/model/v1"
 	"github.com/apache/skywalking-banyandb/pkg/index"
 	"github.com/apache/skywalking-banyandb/pkg/index/inverted"
 	"github.com/apache/skywalking-banyandb/pkg/logger"
@@ -364,6 +367,24 @@ func (s *seriesIndex) SearchWithoutSeries(ctx context.Context, opts IndexSearchO
 		}
 		sortedValues = append(sortedValues, val.SortedValue)
 	}
+
+	if sortedValues == nil && opts.Order.Type == index.OrderByTypeTime {
+		timestamps := make([]int64, len(sd.Timestamps))
+		copy(timestamps, sd.Timestamps)
+
+		if opts.Order.Sort == modelv1.Sort_SORT_ASC || opts.Order.Sort == modelv1.Sort_SORT_UNSPECIFIED {
+			sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
+		} else {
+			sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] > timestamps[j] })
+		}
+
+		for _, ts := range timestamps {
+			buf := make([]byte, 8)
+			binary.BigEndian.PutUint64(buf, uint64(ts))
+			sortedValues = append(sortedValues, buf)
+		}
+	}
+
 	if span != nil {
 		span.Tagf("query", "%s", iter.Query().String())
 		span.Tagf("rounds", "%d", r)
