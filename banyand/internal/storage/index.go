@@ -368,7 +368,7 @@ func (s *seriesIndex) SearchWithoutSeries(ctx context.Context, opts IndexSearchO
 		sortedValues = append(sortedValues, val.SortedValue)
 	}
 
-	if sortedValues == nil && opts.Order.Type == index.OrderByTypeTime {
+	if len(sortedValues) == 0 && opts.Order.Type == index.OrderByTypeTime {
 		timestamps := make([]int64, len(sd.Timestamps))
 		copy(timestamps, sd.Timestamps)
 
