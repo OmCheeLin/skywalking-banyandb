@@ -20,11 +20,12 @@ package storage
 import (
 	"context"
 	"encoding/binary"
-	"github.com/pkg/errors"
-	"go.uber.org/multierr"
 	"maps"
 	"path"
 	"sort"
+
+	"github.com/pkg/errors"
+	"go.uber.org/multierr"
 
 	"github.com/apache/skywalking-banyandb/api/common"
 	modelv1 "github.com/apache/skywalking-banyandb/api/proto/banyandb/model/v1"
@@ -367,8 +368,7 @@ func (s *seriesIndex) SearchWithoutSeries(ctx context.Context, opts IndexSearchO
 		sortedValues = append(sortedValues, val.SortedValue)
 	}
 
-	if len(sortedValues) == 0 && opts.Order.Type == index.OrderByTypeTime {
-		// 索引排序
+	if opts.Order.Type == index.OrderByTypeTime {
 		indices := make([]int, len(sd.Timestamps))
 		for i := range indices {
 			indices[i] = i
@@ -380,7 +380,6 @@ func (s *seriesIndex) SearchWithoutSeries(ctx context.Context, opts IndexSearchO
 			sort.Slice(indices, func(i, j int) bool { return sd.Timestamps[indices[i]] > sd.Timestamps[indices[j]] })
 		}
 
-		// 重新排序后的结果
 		sortedSeries := make(pbv1.SeriesList, len(sd.SeriesList))
 		sortedTimestamps := make([]int64, len(sd.Timestamps))
 		sortedVersions := make([]int64, len(sd.Versions))
@@ -397,13 +396,11 @@ func (s *seriesIndex) SearchWithoutSeries(ctx context.Context, opts IndexSearchO
 				sortedFields[i] = sd.Fields[idx]
 			}
 
-			// 同时填充 sortedValues
 			buf := make([]byte, 8)
 			binary.BigEndian.PutUint64(buf, uint64(sd.Timestamps[idx]))
 			sortedValues = append(sortedValues, buf)
 		}
 
-		// 覆盖 sd
 		sd.SeriesList = sortedSeries
 		sd.Timestamps = sortedTimestamps
 		sd.Versions = sortedVersions
