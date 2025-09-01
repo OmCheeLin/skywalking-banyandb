@@ -20,7 +20,6 @@ package storage
 import (
 	"context"
 	"encoding/binary"
-	modelv1 "github.com/apache/skywalking-banyandb/api/proto/banyandb/model/v1"
 	"github.com/pkg/errors"
 	"go.uber.org/multierr"
 	"maps"
@@ -28,6 +27,7 @@ import (
 	"sort"
 
 	"github.com/apache/skywalking-banyandb/api/common"
+	modelv1 "github.com/apache/skywalking-banyandb/api/proto/banyandb/model/v1"
 	"github.com/apache/skywalking-banyandb/pkg/index"
 	"github.com/apache/skywalking-banyandb/pkg/index/inverted"
 	"github.com/apache/skywalking-banyandb/pkg/logger"
