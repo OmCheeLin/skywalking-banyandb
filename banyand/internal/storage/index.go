@@ -20,15 +20,14 @@ package storage
 import (
 	"context"
 	"encoding/binary"
+	modelv1 "github.com/apache/skywalking-banyandb/api/proto/banyandb/model/v1"
+	"github.com/pkg/errors"
+	"go.uber.org/multierr"
 	"maps"
 	"path"
 	"sort"
 
-	"github.com/pkg/errors"
-	"go.uber.org/multierr"
-
 	"github.com/apache/skywalking-banyandb/api/common"
-	modelv1 "github.com/apache/skywalking-banyandb/api/proto/banyandb/model/v1"
 	"github.com/apache/skywalking-banyandb/pkg/index"
 	"github.com/apache/skywalking-banyandb/pkg/index/inverted"
 	"github.com/apache/skywalking-banyandb/pkg/logger"
@@ -369,19 +368,47 @@ func (s *seriesIndex) SearchWithoutSeries(ctx context.Context, opts IndexSearchO
 	}
 
 	if len(sortedValues) == 0 && opts.Order.Type == index.OrderByTypeTime {
-		timestamps := make([]int64, len(sd.Timestamps))
-		copy(timestamps, sd.Timestamps)
-
-		if opts.Order.Sort == modelv1.Sort_SORT_ASC || opts.Order.Sort == modelv1.Sort_SORT_UNSPECIFIED {
-			sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
-		} else {
-			sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] > timestamps[j] })
+		// 索引排序
+		indices := make([]int, len(sd.Timestamps))
+		for i := range indices {
+			indices[i] = i
 		}
 
-		for _, ts := range timestamps {
+		if opts.Order.Sort == modelv1.Sort_SORT_ASC || opts.Order.Sort == modelv1.Sort_SORT_UNSPECIFIED {
+			sort.Slice(indices, func(i, j int) bool { return sd.Timestamps[indices[i]] < sd.Timestamps[indices[j]] })
+		} else {
+			sort.Slice(indices, func(i, j int) bool { return sd.Timestamps[indices[i]] > sd.Timestamps[indices[j]] })
+		}
+
+		// 重新排序后的结果
+		sortedSeries := make(pbv1.SeriesList, len(sd.SeriesList))
+		sortedTimestamps := make([]int64, len(sd.Timestamps))
+		sortedVersions := make([]int64, len(sd.Versions))
+		var sortedFields FieldResultList
+		if len(sd.Fields) > 0 {
+			sortedFields = make(FieldResultList, len(sd.Fields))
+		}
+
+		for i, idx := range indices {
+			sortedSeries[i] = sd.SeriesList[idx]
+			sortedTimestamps[i] = sd.Timestamps[idx]
+			sortedVersions[i] = sd.Versions[idx]
+			if len(sd.Fields) > 0 {
+				sortedFields[i] = sd.Fields[idx]
+			}
+
+			// 同时填充 sortedValues
 			buf := make([]byte, 8)
-			binary.BigEndian.PutUint64(buf, uint64(ts))
+			binary.BigEndian.PutUint64(buf, uint64(sd.Timestamps[idx]))
 			sortedValues = append(sortedValues, buf)
+		}
+
+		// 覆盖 sd
+		sd.SeriesList = sortedSeries
+		sd.Timestamps = sortedTimestamps
+		sd.Versions = sortedVersions
+		if len(sd.Fields) > 0 {
+			sd.Fields = sortedFields
 		}
 	}
 
