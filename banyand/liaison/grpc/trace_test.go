@@ -34,7 +34,7 @@ import (
 	"github.com/apache/skywalking-banyandb/pkg/logger"
 )
 
-// mockNodeRegistry is a simple mock implementation of NodeRegistry for testing
+// mockNodeRegistry is a simple mock implementation of NodeRegistry for testing.
 type mockNodeRegistry struct {
 	locateFunc func(group, name string, shardID, replicaID uint32) (string, error)
 }
@@ -88,7 +88,7 @@ func TestTraceServicePublishMessagesRehash(t *testing.T) {
 
 		callCount := 0
 		mockNR := &mockNodeRegistry{
-			locateFunc: func(group, name string, shardID, replicaID uint32) (string, error) {
+			locateFunc: func(_ string, _ string, _ uint32, replicaID uint32) (string, error) {
 				callCount++
 				if replicaID == 0 {
 					return "", errors.New("node unavailable")
@@ -130,7 +130,7 @@ func TestTraceServicePublishMessagesRehash(t *testing.T) {
 
 		callCount := 0
 		mockNR := &mockNodeRegistry{
-			locateFunc: func(group, name string, shardID, replicaID uint32) (string, error) {
+			locateFunc: func(_ string, _ string, _ uint32, replicaID uint32) (string, error) {
 				callCount++
 				if replicaID == 0 {
 					return "node-1", nil
@@ -177,7 +177,7 @@ func TestTraceServicePublishMessagesRehash(t *testing.T) {
 		nodeSpecSent := make(map[string]bool)
 
 		mockNR := &mockNodeRegistry{
-			locateFunc: func(group, name string, shardID, replicaID uint32) (string, error) {
+			locateFunc: func(_ string, _ string, _ uint32, _ uint32) (string, error) {
 				return "", errors.New("node unavailable")
 			},
 		}

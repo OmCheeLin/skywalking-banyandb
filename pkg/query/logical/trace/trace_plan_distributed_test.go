@@ -40,7 +40,7 @@ func TestDistributedPlanDeduplication(t *testing.T) {
 		TraceId: "trace-1", // Same trace ID
 		Spans: []*tracev1.Span{
 			{SpanId: "span-2", Span: []byte("span-data-2-duplicate")}, // Duplicate span ID
-			{SpanId: "span-3", Span: []byte("span-data-3")},            // New span
+			{SpanId: "span-3", Span: []byte("span-data-3")},           // New span
 		},
 	}
 
@@ -134,17 +134,14 @@ func TestDistributedPlanDeduplication(t *testing.T) {
 	assert.True(t, spanIDs["span-3"])
 }
 
-// mockSortIterator is a simple mock implementation for testing
+// mockSortIterator is a simple mock implementation for testing.
 type mockSortIterator struct {
 	traces []*comparableTrace
 	index  int
 }
 
 func (m *mockSortIterator) Next() bool {
-	if m.index >= len(m.traces) {
-		return false
-	}
-	return true
+	return m.index < len(m.traces)
 }
 
 func (m *mockSortIterator) Val() *comparableTrace {
@@ -171,4 +168,3 @@ func TestDistributedPlanProperties(t *testing.T) {
 	assert.True(t, plan.sortByTraceID)
 	assert.False(t, plan.desc)
 }
-
