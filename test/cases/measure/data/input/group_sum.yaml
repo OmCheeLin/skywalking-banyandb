@@ -14,24 +14,22 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-#
 
-NAME := fodc
-BINARIES := $(NAME)-proxy
+name: "service_cpm_minute"
+groups: ["sw_metric"]
+tagProjection:
+  tagFamilies:
+  - name: "default"
+    tags: ["id"]
+fieldProjection:
+  names: ["total", "value"]
+groupBy:
+  tagProjection:
+    tagFamilies:
+    - name: "default"
+      tags: ["id"]
+  fieldName: "value"
+agg:
+  function: "AGGREGATION_FUNCTION_SUM"
+  fieldName: "value"
 
-IMG_NAME := skywalking-banyandb-fodc-proxy
-
-# Override SOURCE_DIR to match the actual Go module path structure
-SOURCE_DIR := fodc/proxy
-
-include ../../scripts/build/version.mk
-include ../../scripts/build/base.mk
-include ../../scripts/build/generate_go.mk
-include ../../scripts/build/build.mk
-include ../../scripts/build/docker.mk
-include ../../scripts/build/test.mk
-include ../../scripts/build/lint.mk
-include ../../scripts/build/vendor.mk
-include ../../scripts/build/help.mk
-
-prepare-build: generate
