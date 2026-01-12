@@ -161,8 +161,7 @@ func DistributedAnalyze(criteria *measurev1.QueryRequest, ss []logical.Schema) (
 	needCompletePushDownAgg := criteria.GetAgg() != nil &&
 		(criteria.GetAgg().GetFunction() == modelv1.AggregationFunction_AGGREGATION_FUNCTION_MAX ||
 			criteria.GetAgg().GetFunction() == modelv1.AggregationFunction_AGGREGATION_FUNCTION_MIN ||
-			criteria.GetAgg().GetFunction() == modelv1.AggregationFunction_AGGREGATION_FUNCTION_SUM ||
-			criteria.GetAgg().GetFunction() == modelv1.AggregationFunction_AGGREGATION_FUNCTION_COUNT) &&
+			criteria.GetAgg().GetFunction() == modelv1.AggregationFunction_AGGREGATION_FUNCTION_SUM) &&
 		criteria.GetTop() == nil
 
 	// parse fields
