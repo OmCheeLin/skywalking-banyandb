@@ -535,7 +535,9 @@ func (s *pushedDownAggregatedIterator) Close() error {
 	return nil
 }
 
-// deduplicateAggregatedDataPoints removes duplicate aggregated results from multiple replicas.
+// deduplicateAggregatedDataPoints removes duplicate aggregated results from multiple replicas
+// by keeping only one data point per group. Since replicas hold identical data, aggregates
+// for the same group are identical across replicas.
 func deduplicateAggregatedDataPoints(dataPoints []*measurev1.DataPoint, groupByTagsRefs [][]*logical.TagRef) ([]*measurev1.DataPoint, error) {
 	if len(groupByTagsRefs) == 0 {
 		return dataPoints, nil
