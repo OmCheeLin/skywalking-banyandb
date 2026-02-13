@@ -30,7 +30,7 @@ concurrency:
 jobs:
   DockerImage:
     name: Build Docker image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - name: Checkout code
@@ -49,7 +49,7 @@ jobs:
 
   StoragePlugins:
     name: Storage E2E
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
     needs: [DockerImage]
     strategy:
@@ -118,7 +118,7 @@ jobs:
           path: "test/e2e-v2/cases/lifecycle/data-generator/tmp"
 
   Storage:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
     needs: [StoragePlugins]
     steps:
