@@ -38,6 +38,56 @@ var (
 	errUnsupportedAggregationField = errors.New("unsupported aggregation operation on this field")
 )
 
+// distributedMeanFieldNames returns the field names for sum and count in distributed mean aggregation.
+func distributedMeanFieldNames(fieldName string) (sumName, countName string) {
+	return fieldName + "_sum", fieldName + "_count"
+}
+
+// buildAggregationOutputFields builds output fields from aggregation result.
+// For distributed mean at liaison (1 ref), outputs Val() (mean); at data node (2 refs), outputs sum and count.
+func buildAggregationOutputFields[N aggregation.Number](
+	aggrFunc aggregation.Func[N],
+	outputRefs []*logical.FieldRef,
+	aggrType modelv1.AggregationFunction,
+) ([]*measurev1.DataPoint_Field, error) {
+	if aggrType == modelv1.AggregationFunction_AGGREGATION_FUNCTION_DISTRIBUTED_MEAN {
+		if len(outputRefs) == 1 {
+			val, valErr := aggregation.ToFieldValue(aggrFunc.Val())
+			if valErr != nil {
+				return nil, valErr
+			}
+			return []*measurev1.DataPoint_Field{
+				{Name: outputRefs[0].Field.Name, Value: val},
+			}, nil
+		}
+		type sumCountGetter interface {
+			GetSumCount() (N, N)
+		}
+		if sc, ok := any(aggrFunc).(sumCountGetter); ok {
+			sumVal, countVal := sc.GetSumCount()
+			sumFieldVal, sumErr := aggregation.ToFieldValue(sumVal)
+			if sumErr != nil {
+				return nil, sumErr
+			}
+			countFieldVal, countErr := aggregation.ToFieldValue(countVal)
+			if countErr != nil {
+				return nil, countErr
+			}
+			return []*measurev1.DataPoint_Field{
+				{Name: outputRefs[0].Field.Name, Value: sumFieldVal},
+				{Name: outputRefs[1].Field.Name, Value: countFieldVal},
+			}, nil
+		}
+	}
+	val, err := aggregation.ToFieldValue(aggrFunc.Val())
+	if err != nil {
+		return nil, err
+	}
+	return []*measurev1.DataPoint_Field{
+		{Name: outputRefs[0].Field.Name, Value: val},
+	}, nil
+}
+
 type unresolvedAggregation struct {
 	unresolvedInput  logical.UnresolvedPlan
 	aggregationField *logical.Field
@@ -45,7 +95,12 @@ type unresolvedAggregation struct {
 	isGroup          bool
 }
 
-func newUnresolvedAggregation(input logical.UnresolvedPlan, aggrField *logical.Field, aggrFunc modelv1.AggregationFunction, isGroup bool) logical.UnresolvedPlan {
+func newUnresolvedAggregation(
+	input logical.UnresolvedPlan,
+	aggrField *logical.Field,
+	aggrFunc modelv1.AggregationFunction,
+	isGroup bool,
+) logical.UnresolvedPlan {
 	return &unresolvedAggregation{
 		unresolvedInput:  input,
 		aggrFunc:         aggrFunc,
@@ -61,35 +116,67 @@ func (gba *unresolvedAggregation) Analyze(measureSchema logical.Schema) (logical
 	}
 	// check validity of aggregation fields
 	schema := prevPlan.Schema()
-	aggregationFieldRefs, err := schema.CreateFieldRef(gba.aggregationField)
+	inputRefs, err := schema.CreateFieldRef(gba.aggregationField)
 	if err != nil {
 		return nil, err
 	}
-	if len(aggregationFieldRefs) == 0 {
+	if len(inputRefs) == 0 {
 		return nil, errors.Wrap(errFieldNotDefined, "aggregation schema")
 	}
-	fieldRef := aggregationFieldRefs[0]
-	switch fieldRef.Spec.Spec.FieldType {
+	inputRef := inputRefs[0]
+	isLiaisonMerge := isAggregationOverDistributedPlan(prevPlan)
+	outputRefs := resolveAggregationOutputFieldRefs(inputRef, gba.aggrFunc, isLiaisonMerge)
+	switch inputRef.Spec.Spec.FieldType {
 	case databasev1.FieldType_FIELD_TYPE_INT:
-		return newAggregationPlan[int64](gba, prevPlan, schema, fieldRef)
+		return newAggregationPlan[int64](gba, prevPlan, schema, inputRef, outputRefs)
 	case databasev1.FieldType_FIELD_TYPE_FLOAT:
-		return newAggregationPlan[float64](gba, prevPlan, schema, fieldRef)
+		return newAggregationPlan[float64](gba, prevPlan, schema, inputRef, outputRefs)
 	default:
-		return nil, errors.WithMessagef(errUnsupportedAggregationField, "field: %s", fieldRef.Spec.Spec)
+		return nil, errors.WithMessagef(errUnsupportedAggregationField, "field: %s", inputRef.Spec.Spec)
 	}
+}
+
+// isAggregationOverDistributedPlan returns true when aggregation is over GroupBy over DistributedPlan (liaison merge).
+func isAggregationOverDistributedPlan(prevPlan logical.Plan) bool {
+	gb, ok := prevPlan.(*groupBy)
+	if !ok {
+		return false
+	}
+	_, ok = gb.Input.(*distributedPlan)
+	return ok
+}
+
+// resolveAggregationOutputFieldRefs returns the output field refs for aggregation.
+// For distributed mean at liaison, returns single "value" ref (mean); at data node returns field_sum and field_count.
+func resolveAggregationOutputFieldRefs(inputRef *logical.FieldRef, aggrFunc modelv1.AggregationFunction,
+	isLiaisonMerge bool,
+) []*logical.FieldRef {
+	if aggrFunc == modelv1.AggregationFunction_AGGREGATION_FUNCTION_DISTRIBUTED_MEAN {
+		if isLiaisonMerge {
+			return []*logical.FieldRef{inputRef}
+		}
+		sumName, countName := distributedMeanFieldNames(inputRef.Field.Name)
+		fieldType := inputRef.Spec.Spec.FieldType
+		return []*logical.FieldRef{
+			{Field: logical.NewField(sumName), Spec: &logical.FieldSpec{FieldIdx: 0, Spec: &databasev1.FieldSpec{Name: sumName, FieldType: fieldType}}},
+			{Field: logical.NewField(countName), Spec: &logical.FieldSpec{FieldIdx: 1, Spec: &databasev1.FieldSpec{Name: countName, FieldType: fieldType}}},
+		}
+	}
+	return []*logical.FieldRef{inputRef}
 }
 
 type aggregationPlan[N aggregation.Number] struct {
+	schema   logical.Schema
+	aggrFunc aggregation.Func[N]
 	*logical.Parent
-	schema              logical.Schema
-	aggregationFieldRef *logical.FieldRef
-	aggrFunc            aggregation.Func[N]
-	aggrType            modelv1.AggregationFunction
-	isGroup             bool
+	aggregationInputFieldRef *logical.FieldRef
+	aggregationOutputRefs    []*logical.FieldRef
+	aggrType                 modelv1.AggregationFunction
+	isGroup                  bool
 }
 
 func newAggregationPlan[N aggregation.Number](gba *unresolvedAggregation, prevPlan logical.Plan,
-	measureSchema logical.Schema, fieldRef *logical.FieldRef,
+	measureSchema logical.Schema, inputRef *logical.FieldRef, outputRefs []*logical.FieldRef,
 ) (*aggregationPlan[N], error) {
 	aggrFunc, err := aggregation.NewFunc[N](gba.aggrFunc)
 	if err != nil {
@@ -100,10 +187,12 @@ func newAggregationPlan[N aggregation.Number](gba *unresolvedAggregation, prevPl
 			UnresolvedInput: gba.unresolvedInput,
 			Input:           prevPlan,
 		},
-		schema:              measureSchema,
-		aggrFunc:            aggrFunc,
-		aggregationFieldRef: fieldRef,
-		isGroup:             gba.isGroup,
+		schema:                   measureSchema,
+		aggrFunc:                 aggrFunc,
+		aggregationInputFieldRef: inputRef,
+		aggregationOutputRefs:    outputRefs,
+		aggrType:                 gba.aggrFunc,
+		isGroup:                  gba.isGroup,
 	}, nil
 }
 
@@ -111,7 +200,7 @@ func (g *aggregationPlan[N]) String() string {
 	return fmt.Sprintf("%s aggregation: aggregation{type=%d,field=%s}",
 		g.Input,
 		g.aggrType,
-		g.aggregationFieldRef.Field.Name)
+		g.aggregationInputFieldRef.Field.Name)
 }
 
 func (g *aggregationPlan[N]) Children() []logical.Plan {
@@ -119,7 +208,12 @@ func (g *aggregationPlan[N]) Children() []logical.Plan {
 }
 
 func (g *aggregationPlan[N]) Schema() logical.Schema {
-	return g.schema.ProjFields(g.aggregationFieldRef)
+	mSchema, ok := g.schema.(*schema)
+	if !ok {
+		return g.schema.ProjFields(g.aggregationOutputRefs...)
+	}
+	extended := mSchema.extendWithFieldRefs(g.aggregationOutputRefs)
+	return extended.ProjFields(g.aggregationOutputRefs...)
 }
 
 func (g *aggregationPlan[N]) Execute(ec context.Context) (executor.MIterator, error) {
@@ -128,28 +222,33 @@ func (g *aggregationPlan[N]) Execute(ec context.Context) (executor.MIterator, er
 		return nil, err
 	}
 	if g.isGroup {
-		return newAggGroupMIterator(iter, g.aggregationFieldRef, g.aggrFunc), nil
+		return newAggGroupMIterator(iter, g.aggregationInputFieldRef, g.aggregationOutputRefs, g.aggrFunc, g.aggrType), nil
 	}
-	return newAggAllIterator(iter, g.aggregationFieldRef, g.aggrFunc), nil
+	return newAggAllIterator(iter, g.aggregationInputFieldRef, g.aggregationOutputRefs, g.aggrFunc, g.aggrType), nil
 }
 
 type aggGroupIterator[N aggregation.Number] struct {
-	prev                executor.MIterator
-	aggregationFieldRef *logical.FieldRef
-	aggrFunc            aggregation.Func[N]
-
-	err error
+	prev                  executor.MIterator
+	aggrFunc              aggregation.Func[N]
+	err                   error
+	aggregationInputRef   *logical.FieldRef
+	aggregationOutputRefs []*logical.FieldRef
+	aggrType              modelv1.AggregationFunction
 }
 
 func newAggGroupMIterator[N aggregation.Number](
 	prev executor.MIterator,
-	aggregationFieldRef *logical.FieldRef,
+	aggregationInputRef *logical.FieldRef,
+	aggregationOutputRefs []*logical.FieldRef,
 	aggrFunc aggregation.Func[N],
+	aggrType modelv1.AggregationFunction,
 ) executor.MIterator {
 	return &aggGroupIterator[N]{
-		prev:                prev,
-		aggregationFieldRef: aggregationFieldRef,
-		aggrFunc:            aggrFunc,
+		prev:                  prev,
+		aggregationInputRef:   aggregationInputRef,
+		aggregationOutputRefs: aggregationOutputRefs,
+		aggrFunc:              aggrFunc,
+		aggrType:              aggrType,
 	}
 }
 
@@ -170,14 +269,47 @@ func (ami *aggGroupIterator[N]) Current() []*measurev1.InternalDataPoint {
 	var shardID uint32
 	for _, idp := range group {
 		dp := idp.GetDataPoint()
-		value := dp.GetFields()[ami.aggregationFieldRef.Spec.FieldIdx].
-			GetValue()
-		v, err := aggregation.FromFieldValue[N](value)
-		if err != nil {
-			ami.err = err
-			return nil
+		if ami.aggrType == modelv1.AggregationFunction_AGGREGATION_FUNCTION_DISTRIBUTED_MEAN {
+			sumName, countName := distributedMeanFieldNames(ami.aggregationInputRef.Field.Name)
+			var sumVal, countVal *modelv1.FieldValue
+			for _, f := range dp.GetFields() {
+				switch f.Name {
+				case sumName:
+					sumVal = f.GetValue()
+				case countName:
+					countVal = f.GetValue()
+				}
+			}
+			if sumVal != nil && countVal != nil {
+				sum, sumErr := aggregation.FromFieldValue[N](sumVal)
+				if sumErr != nil {
+					ami.err = sumErr
+					return nil
+				}
+				count, countErr := aggregation.FromFieldValue[N](countVal)
+				if countErr != nil {
+					ami.err = countErr
+					return nil
+				}
+				ami.aggrFunc.In(sum, count)
+			} else {
+				value := dp.GetFields()[ami.aggregationInputRef.Spec.FieldIdx].GetValue()
+				v, parseErr := aggregation.FromFieldValue[N](value)
+				if parseErr != nil {
+					ami.err = parseErr
+					return nil
+				}
+				ami.aggrFunc.In(v)
+			}
+		} else {
+			value := dp.GetFields()[ami.aggregationInputRef.Spec.FieldIdx].GetValue()
+			v, parseErr := aggregation.FromFieldValue[N](value)
+			if parseErr != nil {
+				ami.err = parseErr
+				return nil
+			}
+			ami.aggrFunc.In(v)
 		}
-		ami.aggrFunc.In(v)
 		if resultDp != nil {
 			continue
 		}
@@ -189,17 +321,12 @@ func (ami *aggGroupIterator[N]) Current() []*measurev1.InternalDataPoint {
 	if resultDp == nil {
 		return nil
 	}
-	val, err := aggregation.ToFieldValue(ami.aggrFunc.Val())
-	if err != nil {
-		ami.err = err
+	fields, buildErr := buildAggregationOutputFields(ami.aggrFunc, ami.aggregationOutputRefs, ami.aggrType)
+	if buildErr != nil {
+		ami.err = buildErr
 		return nil
 	}
-	resultDp.Fields = []*measurev1.DataPoint_Field{
-		{
-			Name:  ami.aggregationFieldRef.Field.Name,
-			Value: val,
-		},
-	}
+	resultDp.Fields = fields
 	return []*measurev1.InternalDataPoint{{DataPoint: resultDp, ShardId: shardID}}
 }
 
@@ -208,23 +335,28 @@ func (ami *aggGroupIterator[N]) Close() error {
 }
 
 type aggAllIterator[N aggregation.Number] struct {
-	prev                executor.MIterator
-	aggregationFieldRef *logical.FieldRef
-	aggrFunc            aggregation.Func[N]
-
-	result *measurev1.DataPoint
-	err    error
+	prev                  executor.MIterator
+	aggrFunc              aggregation.Func[N]
+	err                   error
+	aggregationInputRef   *logical.FieldRef
+	result                *measurev1.DataPoint
+	aggregationOutputRefs []*logical.FieldRef
+	aggrType              modelv1.AggregationFunction
 }
 
 func newAggAllIterator[N aggregation.Number](
 	prev executor.MIterator,
-	aggregationFieldRef *logical.FieldRef,
+	aggregationInputRef *logical.FieldRef,
+	aggregationOutputRefs []*logical.FieldRef,
 	aggrFunc aggregation.Func[N],
+	aggrType modelv1.AggregationFunction,
 ) executor.MIterator {
 	return &aggAllIterator[N]{
-		prev:                prev,
-		aggregationFieldRef: aggregationFieldRef,
-		aggrFunc:            aggrFunc,
+		prev:                  prev,
+		aggregationInputRef:   aggregationInputRef,
+		aggregationOutputRefs: aggregationOutputRefs,
+		aggrFunc:              aggrFunc,
+		aggrType:              aggrType,
 	}
 }
 
@@ -237,14 +369,46 @@ func (ami *aggAllIterator[N]) Next() bool {
 		group := ami.prev.Current()
 		for _, idp := range group {
 			dp := idp.GetDataPoint()
-			value := dp.GetFields()[ami.aggregationFieldRef.Spec.FieldIdx].
-				GetValue()
-			v, err := aggregation.FromFieldValue[N](value)
-			if err != nil {
-				ami.err = err
-				return false
+			if ami.aggrType == modelv1.AggregationFunction_AGGREGATION_FUNCTION_DISTRIBUTED_MEAN {
+				sumName, countName := distributedMeanFieldNames(ami.aggregationInputRef.Field.Name)
+				var sumVal, countVal *modelv1.FieldValue
+				for _, f := range dp.GetFields() {
+					if f.Name == sumName {
+						sumVal = f.GetValue()
+					} else if f.Name == countName {
+						countVal = f.GetValue()
+					}
+				}
+				if sumVal != nil && countVal != nil {
+					sum, sumErr := aggregation.FromFieldValue[N](sumVal)
+					if sumErr != nil {
+						ami.err = sumErr
+						return false
+					}
+					count, countErr := aggregation.FromFieldValue[N](countVal)
+					if countErr != nil {
+						ami.err = countErr
+						return false
+					}
+					ami.aggrFunc.In(sum, count)
+				} else {
+					value := dp.GetFields()[ami.aggregationInputRef.Spec.FieldIdx].GetValue()
+					v, parseErr := aggregation.FromFieldValue[N](value)
+					if parseErr != nil {
+						ami.err = parseErr
+						return false
+					}
+					ami.aggrFunc.In(v)
+				}
+			} else {
+				value := dp.GetFields()[ami.aggregationInputRef.Spec.FieldIdx].GetValue()
+				v, parseErr := aggregation.FromFieldValue[N](value)
+				if parseErr != nil {
+					ami.err = parseErr
+					return false
+				}
+				ami.aggrFunc.In(v)
 			}
-			ami.aggrFunc.In(v)
 			if resultDp != nil {
 				continue
 			}
@@ -256,17 +420,12 @@ func (ami *aggAllIterator[N]) Next() bool {
 	if resultDp == nil {
 		return false
 	}
-	val, err := aggregation.ToFieldValue(ami.aggrFunc.Val())
-	if err != nil {
-		ami.err = err
+	fields, buildErr := buildAggregationOutputFields(ami.aggrFunc, ami.aggregationOutputRefs, ami.aggrType)
+	if buildErr != nil {
+		ami.err = buildErr
 		return false
 	}
-	resultDp.Fields = []*measurev1.DataPoint_Field{
-		{
-			Name:  ami.aggregationFieldRef.Field.Name,
-			Value: val,
-		},
-	}
+	resultDp.Fields = fields
 	ami.result = resultDp
 	return true
 }

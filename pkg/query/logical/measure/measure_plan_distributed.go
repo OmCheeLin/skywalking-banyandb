@@ -153,15 +153,22 @@ func (ud *unresolvedDistributed) Analyze(s logical.Schema) (logical.Plan, error)
 	if ud.needCompletePushDownAgg {
 		temp.GroupBy = ud.originalQuery.GroupBy
 		temp.Agg = ud.originalQuery.Agg
+		if temp.Agg != nil && temp.Agg.GetFunction() == modelv1.AggregationFunction_AGGREGATION_FUNCTION_MEAN {
+			clonedAgg := proto.Clone(temp.Agg).(*measurev1.QueryRequest_Aggregation)
+			clonedAgg.Function = modelv1.AggregationFunction_AGGREGATION_FUNCTION_DISTRIBUTED_MEAN
+			temp.Agg = clonedAgg
+		}
 	}
-	// push down groupBy, agg and top to data node and rewrite agg result to raw data
-	if ud.originalQuery.Agg != nil && ud.originalQuery.Top != nil {
+	// Push down groupBy, agg and top to data node and rewrite agg result to raw data.
+	// Skip for MEAN: use DISTRIBUTED_MEAN path, data nodes return all aggregated results, Top at liaison.
+	if ud.originalQuery.Agg != nil && ud.originalQuery.Top != nil &&
+		ud.originalQuery.Agg.GetFunction() != modelv1.AggregationFunction_AGGREGATION_FUNCTION_MEAN {
 		temp.RewriteAggTopNResult = true
 		temp.Agg = ud.originalQuery.Agg
 		temp.Top = ud.originalQuery.Top
 		temp.GroupBy = ud.originalQuery.GroupBy
 	}
-	// Prepare groupBy tags refs if needed for deduplication
+	// Prepare groupBy tags refs for deduplication when pushing down aggregation.
 	var groupByTagsRefs [][]*logical.TagRef
 	if ud.needCompletePushDownAgg && ud.originalQuery.GetGroupBy() != nil {
 		groupByTags := logical.ToTags(ud.originalQuery.GetGroupBy().GetTagProjection())
@@ -295,12 +302,12 @@ func (t *distributedPlan) Execute(ctx context.Context) (mi executor.MIterator, e
 				if t.needCompletePushDownAgg {
 					pushedDownAggDps = append(pushedDownAggDps, d.DataPoints...)
 					dataPointCount += len(d.DataPoints)
-					continue
+				} else {
+					dataPointCount += len(d.DataPoints)
+					see = append(see,
+						newSortableElements(d.DataPoints,
+							t.sortByTime, t.sortTagSpec))
 				}
-				dataPointCount += len(d.DataPoints)
-				see = append(see,
-					newSortableElements(d.DataPoints,
-						t.sortByTime, t.sortTagSpec))
 			case *common.Error:
 				err = multierr.Append(err, fmt.Errorf("data node error: %s", d.Error()))
 			}
