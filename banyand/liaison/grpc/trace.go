@@ -247,34 +247,57 @@ func (s *traceService) publishMessages(
 	nodeMetadataSent map[string]bool,
 	nodeSpecSent map[string]bool,
 ) ([]string, error) {
-	nodeID, err := s.nodeRegistry.Locate(metadata.GetGroup(), metadata.GetName(), uint32(shardID), 0)
-	if err != nil {
-		return nil, err
+	// Get the number of copies (replicas + 1) for this group
+	copies, existed := s.groupRepo.copies(metadata.GetGroup())
+	if !existed {
+		return nil, errors.Wrapf(errNotExist, "finding the copies by: %v", metadata)
 	}
 
-	requestToSend := &tracev1.WriteRequest{
-		Version: writeEntity.GetVersion(),
-		Tags:    writeEntity.GetTags(),
-		Span:    writeEntity.GetSpan(),
-	}
-	if !nodeMetadataSent[nodeID] {
-		requestToSend.Metadata = metadata
-		nodeMetadataSent[nodeID] = true
-	}
-	if spec != nil && !nodeSpecSent[nodeID] {
-		requestToSend.TagSpec = spec
-		nodeSpecSent[nodeID] = true
-	}
-	iwr := &tracev1.InternalWriteRequest{
-		ShardId: uint32(shardID),
-		Request: requestToSend,
+	var nodeID string
+	var err error
+	var lastErr error
+	// Try to locate an available node by trying different replica IDs
+	// This allows rehashing to alternative nodes when the primary node is unavailable
+	for replicaID := uint32(0); replicaID < copies; replicaID++ {
+		nodeID, err = s.nodeRegistry.Locate(metadata.GetGroup(), metadata.GetName(), uint32(shardID), replicaID)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		// Found an available node, try to publish
+		requestToSend := &tracev1.WriteRequest{
+			Version: writeEntity.GetVersion(),
+			Tags:    writeEntity.GetTags(),
+			Span:    writeEntity.GetSpan(),
+		}
+		if !nodeMetadataSent[nodeID] {
+			requestToSend.Metadata = metadata
+			nodeMetadataSent[nodeID] = true
+		}
+		if spec != nil && !nodeSpecSent[nodeID] {
+			requestToSend.TagSpec = spec
+			nodeSpecSent[nodeID] = true
+		}
+		iwr := &tracev1.InternalWriteRequest{
+			ShardId: uint32(shardID),
+			Request: requestToSend,
+		}
+
+		message := bus.NewBatchMessageWithNode(bus.MessageID(time.Now().UnixNano()), nodeID, iwr)
+		_, errPub := publisher.Publish(ctx, data.TopicTraceWrite, message)
+		if errPub == nil {
+			return []string{nodeID}, nil
+		}
+		// Publishing failed, continue to try next replica
+		lastErr = errPub
+		s.l.Debug().Err(errPub).Str("nodeID", nodeID).Uint32("replicaID", replicaID).Msg("failed to publish to node, trying next replica")
 	}
 
-	message := bus.NewBatchMessageWithNode(bus.MessageID(time.Now().UnixNano()), nodeID, iwr)
-	if _, err := publisher.Publish(ctx, data.TopicTraceWrite, message); err != nil {
-		return nil, err
+	// All replicas failed, return the last error
+	if lastErr != nil {
+		return nil, errors.Wrapf(lastErr, "failed to locate or publish to any available node for shard %d", shardID)
 	}
-	return []string{nodeID}, nil
+	return nil, errors.Errorf("no available nodes found for shard %d", shardID)
 }
 
 func (s *traceService) sendReply(metadata *commonv1.Metadata, status modelv1.Status, version uint64, stream tracev1.TraceService_WriteServer) {
