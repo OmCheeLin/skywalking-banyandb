@@ -63,7 +63,7 @@ The `meta.bin` is a skipping index file that serves as the entry file for the en
 
 The `primary.bin` file contains the index of each [block](#Block). Through it, the actual data files or the tagFamily metadata files ending with `.tfm` can be indexed, which in turn helps to locate the data in blocks.
 
-Starting from 0.10, a part may also include an optional `smeta.bin` file. It stores compact **series metadata** (for example, a mapping between `SeriesID` and the series `EntityValues`) that appears in this part. This file is mainly used for operational debugging and offline inspection tools, and older parts may not have it.
+The optional `smeta.bin` file persists compact series metadata (e.g., SeriesID to EntityValues mappings). It is primarily designed for operational debugging and offline inspection tools.
 
 Notably, for data of the `Stream` type, since there are no field columns, the `fields.bin` file does not exist, while the rest of the structure is entirely consistent with the `Measure` type.
 
