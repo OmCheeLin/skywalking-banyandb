@@ -414,6 +414,11 @@ func (s *clientService) SetMetricsRegistry(omr observability.MetricsRegistry) {
 	s.omr = omr
 }
 
+// MetricsRegistry returns the associated metrics registry, if any.
+func (s *clientService) MetricsRegistry() observability.MetricsRegistry {
+	return s.omr
+}
+
 func (s *clientService) Name() string {
 	return "metadata"
 }

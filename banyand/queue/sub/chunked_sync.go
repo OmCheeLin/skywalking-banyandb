@@ -159,7 +159,10 @@ func (s *server) SyncPart(stream clusterv1.ChunkedSyncService_SyncPartServer) er
 				if currentSession.partCtx != nil {
 					if currentSession.partCtx.Handler != nil {
 						if finishErr := currentSession.partCtx.Handler.FinishSync(); finishErr != nil {
-							s.updateChunkOrderMetrics("finish_sync_err", currentSession.sessionID)
+							if currentSession.metadata != nil && s.metrics != nil {
+								s.updateChunkOrderMetrics("finish_sync_err", currentSession.metadata.Topic)
+								s.metrics.activeSyncSessions.Add(-1, currentSession.metadata.Topic)
+							}
 							s.log.Error().Err(finishErr).Str("session_id", currentSession.sessionID).Msg("failed to finish sync for previous session")
 						}
 						if closeErr := currentSession.partCtx.Close(); closeErr != nil {
@@ -176,6 +179,9 @@ func (s *server) SyncPart(stream clusterv1.ChunkedSyncService_SyncPartServer) er
 				startTime:      time.Now(),
 				chunksReceived: 0,
 				partsProgress:  make(map[int]*partProgress),
+			}
+			if s.metrics != nil {
+				s.metrics.activeSyncSessions.Add(1, currentSession.metadata.Topic)
 			}
 			if dl := s.log.Debug(); dl.Enabled() {
 				dl.Str("session_id", sessionID).
@@ -266,7 +272,9 @@ func (s *server) processChunkWithReordering(stream clusterv1.ChunkedSyncService_
 
 	if req.ChunkIndex > buffer.expectedIndex {
 		gap := req.ChunkIndex - buffer.expectedIndex
-		s.updateChunkOrderMetrics("out_of_order_received", req.SessionId)
+		if session.metadata != nil && s.metrics != nil {
+			s.updateChunkOrderMetrics("out_of_order_received", session.metadata.Topic)
+		}
 
 		if gap > s.maxChunkGapSize {
 			errMsg := fmt.Sprintf("chunk gap too large: expected %d, got %d (gap: %d > max: %d)",
@@ -277,7 +285,9 @@ func (s *server) processChunkWithReordering(stream clusterv1.ChunkedSyncService_
 				Uint32("gap", gap).
 				Uint32("max_gap", s.maxChunkGapSize).
 				Msg("chunk gap too large, rejecting")
-			s.updateChunkOrderMetrics("gap_too_large", req.SessionId)
+			if session.metadata != nil && s.metrics != nil {
+				s.updateChunkOrderMetrics("gap_too_large", session.metadata.Topic)
+			}
 			return s.sendResponse(stream, req, clusterv1.SyncStatus_SYNC_STATUS_CHUNK_OUT_OF_ORDER, errMsg, nil)
 		}
 
@@ -288,7 +298,9 @@ func (s *server) processChunkWithReordering(stream clusterv1.ChunkedSyncService_
 				Uint32("buffer_size", uint32(len(buffer.chunks))).
 				Uint32("max_buffer_size", buffer.maxBufferSize).
 				Msg("chunk buffer full, rejecting chunk")
-			s.updateChunkOrderMetrics("buffer_full", req.SessionId)
+			if session.metadata != nil && s.metrics != nil {
+				s.updateChunkOrderMetrics("buffer_full", session.metadata.Topic)
+			}
 			return s.sendResponse(stream, req, clusterv1.SyncStatus_SYNC_STATUS_CHUNK_OUT_OF_ORDER, errMsg, nil)
 		}
 
@@ -301,7 +313,10 @@ func (s *server) processChunkWithReordering(stream clusterv1.ChunkedSyncService_
 				Uint32("buffered_chunks", uint32(len(buffer.chunks))).
 				Msg("buffered out-of-order chunk")
 		}
-		s.updateChunkOrderMetrics("chunk_buffered", req.SessionId)
+		if session.metadata != nil && s.metrics != nil {
+			s.updateChunkOrderMetrics("chunk_buffered", session.metadata.Topic)
+			s.metrics.reorderBuffered.Set(float64(len(buffer.chunks)), session.metadata.Topic)
+		}
 
 		return s.sendResponse(stream, req, clusterv1.SyncStatus_SYNC_STATUS_CHUNK_RECEIVED,
 			fmt.Sprintf("chunk %d buffered (waiting for %d)", req.ChunkIndex, buffer.expectedIndex), nil)
@@ -423,6 +438,9 @@ func (s *server) processBufferedChunks(stream clusterv1.ChunkedSyncService_SyncP
 				return err
 			}
 			buffer.expectedIndex++
+			if session.metadata != nil && s.metrics != nil {
+				s.metrics.reorderBuffered.Set(float64(len(buffer.chunks)), session.metadata.Topic)
+			}
 		} else {
 			break
 		}
@@ -438,6 +456,10 @@ func (s *server) checkBufferTimeout(session *syncSession) error {
 
 	if time.Since(session.chunkBuffer.lastActivity) > session.chunkBuffer.bufferTimeout {
 		if len(session.chunkBuffer.chunks) > 0 {
+			if session.metadata != nil && s.metrics != nil {
+				s.updateChunkOrderMetrics("buffer_timeout", session.metadata.Topic)
+				s.metrics.reorderBuffered.Set(float64(len(session.chunkBuffer.chunks)), session.metadata.Topic)
+			}
 			missing := make([]uint32, 0)
 			for i := session.chunkBuffer.expectedIndex; i < session.chunkBuffer.expectedIndex+10; i++ {
 				if _, exists := session.chunkBuffer.chunks[i]; !exists {
@@ -543,6 +565,23 @@ func (s *server) handleCompletion(stream clusterv1.ChunkedSyncService_SyncPartSe
 		ChunksReceived:     session.chunksReceived,
 		PartsReceived:      uint32(len(session.partsProgress)),
 		PartsResults:       partsResults,
+	}
+
+	if session.metadata != nil && s.metrics != nil {
+		topic := session.metadata.Topic
+		s.metrics.activeSyncSessions.Add(-1, topic)
+		s.metrics.chunkedSyncTotalBytes.Inc(float64(syncResult.TotalBytesReceived), topic)
+		s.metrics.chunkedSyncDurationSecs.Observe(float64(syncResult.DurationMs)/1000.0, topic)
+
+		for _, pr := range partsResults {
+			if !pr.Success {
+				reason := "incomplete"
+				if pr.Error != "" {
+					reason = "error"
+				}
+				s.metrics.chunkedSyncFailedParts.Inc(1, topic, reason)
+			}
+		}
 	}
 
 	if dl := s.log.Debug(); dl.Enabled() {
