@@ -40,6 +40,11 @@ const (
 	defaultPerRequestTimeout = 2 * time.Second
 	defaultBackoffBase       = 500 * time.Millisecond
 	defaultBackoffMax        = 30 * time.Second
+
+	sendErrReasonNonTransient   = "non_transient"
+	sendErrReasonCanceled       = "canceled"
+	sendErrReasonStreamCanceled = "stream_canceled"
+	sendErrReasonRetryExhausted = "retry_exhausted"
 )
 
 type writeStream struct {
@@ -88,7 +93,7 @@ func (bp *batchPublisher) Publish(ctx context.Context, topic bus.Topic, messages
 		topicStr := topic.String()
 		sendData := func() (success bool) {
 			if stream, ok := bp.streams[node]; ok {
-				hasMetrics := bp.pub != nil && bp.pub.metrics != nil
+				hasMetrics := bp.hasMetrics()
 				defer func() {
 					if !success {
 						delete(bp.streams, node)
@@ -171,7 +176,7 @@ func (bp *batchPublisher) Publish(ctx context.Context, topic bus.Topic, messages
 			client:    stream,
 			ctxDoneCh: streamCtx.Done(),
 		}
-		if bp.pub != nil && bp.pub.metrics != nil {
+		if bp.hasMetrics() {
 			bp.pub.metrics.inflightStreams.Add(1, node)
 		}
 		bp.f.events = append(bp.f.events, make(chan batchEvent))
@@ -180,6 +185,10 @@ func (bp *batchPublisher) Publish(ctx context.Context, topic bus.Topic, messages
 		go bp.listenBatchResponse(ctx, stream, deferFn, bp.f.events[len(bp.f.events)-1], nodeName)
 	}
 	return nil, err
+}
+
+func (bp *batchPublisher) hasMetrics() bool {
+	return bp.pub != nil && bp.pub.metrics != nil
 }
 
 // listenBatchResponse receives the server response for a single streaming send and records any failover events.
@@ -216,7 +225,7 @@ func (bp *batchPublisher) listenBatchResponse(ctx context.Context, s clusterv1.S
 func (bp *batchPublisher) Close() (cee map[string]*common.Error, err error) {
 	for nodeName, stream := range bp.streams {
 		err = multierr.Append(err, stream.client.CloseSend())
-		if bp.pub != nil && bp.pub.metrics != nil {
+		if bp.hasMetrics() {
 			bp.pub.metrics.inflightStreams.Add(-1, nodeName)
 		}
 	}
@@ -297,10 +306,10 @@ func isFailoverStatus(s modelv1.Status) bool {
 // retrySend implements bounded retries for client streaming sends with exponential backoff and jitter.
 func (bp *batchPublisher) retrySend(ctx context.Context, stream clusterv1.Service_SendClient, r *clusterv1.SendRequest, node string, topic string) error {
 	var lastErr error
-	if bp.pub != nil && bp.pub.metrics != nil {
+	if bp.hasMetrics() {
 		start := time.Now()
 		defer func() {
-			bp.pub.metrics.sendLatencySeconds.Observe(time.Since(start).Seconds(), topic, node)
+			bp.pub.metrics.sendDurationSeconds.Observe(time.Since(start).Seconds(), topic, node)
 		}()
 	}
 
@@ -331,7 +340,7 @@ func (bp *batchPublisher) retrySend(ctx context.Context, stream clusterv1.Servic
 		cancel()
 
 		if sendErr == nil {
-			if bp.pub != nil && bp.pub.metrics != nil {
+			if bp.hasMetrics() {
 				bp.pub.metrics.sendTotal.Inc(1, topic, node)
 				bp.pub.metrics.sendBytesTotal.Inc(float64(len(r.Body)), topic, node)
 			}
@@ -343,14 +352,13 @@ func (bp *batchPublisher) retrySend(ctx context.Context, stream clusterv1.Servic
 
 		// Check if error is retryable
 		if !grpchelper.IsTransientError(sendErr) {
-			// Non-transient error, don't retry
-			if bp.pub != nil && bp.pub.metrics != nil {
-				bp.pub.metrics.sendErrTotal.Inc(1, topic, node, "non_transient")
+			if bp.hasMetrics() {
+				bp.pub.metrics.sendErrTotal.Inc(1, topic, node, sendErrReasonNonTransient)
 			}
 			return sendErr
 		}
 
-		if bp.pub != nil && bp.pub.metrics != nil {
+		if bp.hasMetrics() {
 			bp.pub.metrics.sendRetryAttempts.Inc(1, topic, node)
 		}
 
@@ -365,27 +373,26 @@ func (bp *batchPublisher) retrySend(ctx context.Context, stream clusterv1.Servic
 		// Sleep with backoff, but respect context cancellation
 		select {
 		case <-time.After(backoff):
-			if bp.pub != nil && bp.pub.metrics != nil {
+			if bp.hasMetrics() {
 				bp.pub.metrics.sendBackoffSeconds.Inc(backoff.Seconds(), topic, node)
 			}
-			// Continue to next attempt
 		case <-ctx.Done():
-			if bp.pub != nil && bp.pub.metrics != nil {
-				bp.pub.metrics.sendErrTotal.Inc(1, topic, node, "canceled")
+			if bp.hasMetrics() {
+				bp.pub.metrics.sendErrTotal.Inc(1, topic, node, sendErrReasonCanceled)
 			}
 			return ctx.Err()
 		case <-stream.Context().Done():
-			if bp.pub != nil && bp.pub.metrics != nil {
-				bp.pub.metrics.sendErrTotal.Inc(1, topic, node, "stream_canceled")
+			if bp.hasMetrics() {
+				bp.pub.metrics.sendErrTotal.Inc(1, topic, node, sendErrReasonStreamCanceled)
 			}
 			return stream.Context().Err()
 		}
 	}
 
 	// All retries exhausted
-	if bp.pub != nil && bp.pub.metrics != nil {
+	if bp.hasMetrics() {
 		bp.pub.metrics.sendRetryExhausted.Inc(1, topic, node)
-		bp.pub.metrics.sendErrTotal.Inc(1, topic, node, "retry_exhausted")
+		bp.pub.metrics.sendErrTotal.Inc(1, topic, node, sendErrReasonRetryExhausted)
 	}
 	return fmt.Errorf("retry exhausted for node %s after %d attempts, last error: %w", node, defaultMaxRetries+1, lastErr)
 }

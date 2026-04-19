@@ -128,6 +128,9 @@ func (s *server) SyncPart(stream clusterv1.ChunkedSyncService_SyncPartServer) er
 	var sessionID string
 	defer func() {
 		if currentSession != nil {
+			if s.metrics != nil && currentSession.metadata != nil && !currentSession.completed {
+				s.metrics.activeSyncSessions.Add(-1, currentSession.metadata.Topic)
+			}
 			if currentSession.partCtx != nil {
 				if closeErr := currentSession.partCtx.Close(); closeErr != nil {
 					s.log.Error().Err(closeErr).Str("session_id", currentSession.sessionID).Msg("failed to close session partCtx")
@@ -578,9 +581,9 @@ func (s *server) handleCompletion(stream clusterv1.ChunkedSyncService_SyncPartSe
 
 		for _, pr := range partsResults {
 			if !pr.Success {
-				reason := "incomplete"
+				reason := failedReasonIncomplete
 				if pr.Error != "" {
-					reason = "error"
+					reason = failedReasonError
 				}
 				s.metrics.chunkedSyncFailedParts.Inc(1, topic, reason)
 			}

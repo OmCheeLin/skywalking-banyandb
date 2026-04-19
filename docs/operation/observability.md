@@ -304,11 +304,11 @@ The following metrics are exported by the `queue_pub` client on liaison nodes an
 
   If `send_err_total` keeps increasing for a specific `(topic,node)`, there is likely an issue with writes from liaison to that data node.
 
-- **Send Latency**
+- **Send Duration**
 
-  End-to-end send latency (including retries and backoff). You can compute percentiles from the histogram:
+  End-to-end send duration (including retries and backoff). You can compute percentiles from the histogram:
 
-  **Expression (p95)**: `histogram_quantile(0.95, sum(rate(banyandb_queue_pub_send_latency_seconds_bucket{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (le,topic,node))`
+  **Expression (p95)**: `histogram_quantile(0.95, sum(rate(banyandb_queue_pub_send_duration_seconds_bucket{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (le,topic,node))`
 
 - **Retries & Backoff**
 

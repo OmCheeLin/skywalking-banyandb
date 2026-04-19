@@ -76,15 +76,15 @@ func (*noopHistogram) Delete(_ ...string) bool        { return true }
 func TestRetryMetrics(t *testing.T) {
 	p := &pub{
 		metrics: &pubMetrics{
-			sendRetryAttempts:  &countingCounter{},
-			sendRetryExhausted: &countingCounter{},
-			sendErrTotal:       &countingCounter{},
-			sendBackoffSeconds: &countingCounter{},
-			sendTotal:          &countingCounter{},
-			sendBytesTotal:     &countingCounter{},
-			sendLatencySeconds: &noopHistogram{},
-			inflightStreams:    &noopGauge{},
-			inflightRequests:   &noopGauge{},
+			sendRetryAttempts:   &countingCounter{},
+			sendRetryExhausted:  &countingCounter{},
+			sendErrTotal:        &countingCounter{},
+			sendBackoffSeconds:  &countingCounter{},
+			sendTotal:           &countingCounter{},
+			sendBytesTotal:      &countingCounter{},
+			sendDurationSeconds: &noopHistogram{},
+			inflightStreams:     &noopGauge{},
+			inflightRequests:    &noopGauge{},
 		},
 	}
 

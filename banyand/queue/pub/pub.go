@@ -89,10 +89,10 @@ type pub struct {
 }
 
 type pubMetrics struct {
-	sendTotal          meter.Counter
-	sendErrTotal       meter.Counter
-	sendBytesTotal     meter.Counter
-	sendLatencySeconds meter.Histogram
+	sendTotal           meter.Counter
+	sendErrTotal        meter.Counter
+	sendBytesTotal      meter.Counter
+	sendDurationSeconds meter.Histogram
 
 	sendRetryAttempts  meter.Counter
 	sendRetryExhausted meter.Counter
@@ -103,10 +103,10 @@ type pubMetrics struct {
 
 func newPubMetrics(factory observability.Factory) *pubMetrics {
 	return &pubMetrics{
-		sendTotal:          factory.NewCounter("send_total", "topic", "node"),
-		sendErrTotal:       factory.NewCounter("send_err_total", "topic", "node", "reason"),
-		sendBytesTotal:     factory.NewCounter("send_bytes_total", "topic", "node"),
-		sendLatencySeconds: factory.NewHistogram("send_latency_seconds", meter.DefBuckets, "topic", "node"),
+		sendTotal:           factory.NewCounter("send_total", "topic", "node"),
+		sendErrTotal:        factory.NewCounter("send_err_total", "topic", "node", "reason"),
+		sendBytesTotal:      factory.NewCounter("send_bytes_total", "topic", "node"),
+		sendDurationSeconds: factory.NewHistogram("send_duration_seconds", meter.DefBuckets, "topic", "node"),
 
 		sendRetryAttempts:  factory.NewCounter("send_retry_attempts_total", "topic", "node"),
 		sendRetryExhausted: factory.NewCounter("send_retry_exhausted_total", "topic", "node"),
@@ -421,11 +421,8 @@ func (p *pub) PreRun(context.Context) error {
 	p.log = logger.GetLogger("server-queue-pub-" + p.prefix)
 
 	if p.metrics == nil {
-		type repoWithMetrics interface {
-			MetricsRegistry() observability.MetricsRegistry
-		}
-		if repo, ok := p.metadata.(repoWithMetrics); ok {
-			if omr := repo.MetricsRegistry(); omr != nil {
+		if svc, ok := p.metadata.(metadata.Service); ok {
+			if omr := svc.MetricsRegistry(); omr != nil {
 				p.metrics = newPubMetrics(omr.With(queuePubScope))
 			} else {
 				p.log.Warn().Msg("queue_pub metrics disabled: MetricsRegistry returned nil")

@@ -59,7 +59,12 @@ import (
 	pkgtls "github.com/apache/skywalking-banyandb/pkg/tls"
 )
 
-const defaultRecvSize = 10 << 20
+const (
+	defaultRecvSize = 10 << 20
+
+	failedReasonIncomplete = "incomplete"
+	failedReasonError      = "error"
+)
 
 var (
 	errServerCert = errors.New("invalid server cert file")

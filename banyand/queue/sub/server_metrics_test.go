@@ -187,7 +187,7 @@ func TestChunkedSyncFailedPartsMetric(t *testing.T) {
 				0: {completed: false, receivedBytes: 0},
 			},
 			errorMsg:       "",
-			expectedReason: "incomplete",
+			expectedReason: failedReasonIncomplete,
 			expectedCount:  1,
 		},
 		{
@@ -196,7 +196,7 @@ func TestChunkedSyncFailedPartsMetric(t *testing.T) {
 				0: {completed: false, receivedBytes: 0},
 			},
 			errorMsg:       "disk full",
-			expectedReason: "error",
+			expectedReason: failedReasonError,
 			expectedCount:  1,
 		},
 		{
@@ -206,7 +206,7 @@ func TestChunkedSyncFailedPartsMetric(t *testing.T) {
 				1: {completed: false, receivedBytes: 0},
 			},
 			errorMsg:       "",
-			expectedReason: "incomplete",
+			expectedReason: failedReasonIncomplete,
 			expectedCount:  2,
 		},
 	}
