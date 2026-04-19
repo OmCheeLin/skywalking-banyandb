@@ -156,12 +156,14 @@ func (s *server) SyncPart(stream clusterv1.ChunkedSyncService_SyncPartServer) er
 
 		if req.GetMetadata() != nil {
 			if currentSession != nil {
+				if s.metrics != nil && currentSession.metadata != nil {
+					s.metrics.activeSyncSessions.Add(-1, currentSession.metadata.Topic)
+				}
 				if currentSession.partCtx != nil {
 					if currentSession.partCtx.Handler != nil {
 						if finishErr := currentSession.partCtx.Handler.FinishSync(); finishErr != nil {
-							if currentSession.metadata != nil && s.metrics != nil {
+							if currentSession.metadata != nil {
 								s.updateChunkOrderMetrics("finish_sync_err", currentSession.metadata.Topic)
-								s.metrics.activeSyncSessions.Add(-1, currentSession.metadata.Topic)
 							}
 							s.log.Error().Err(finishErr).Str("session_id", currentSession.sessionID).Msg("failed to finish sync for previous session")
 						}
@@ -570,6 +572,7 @@ func (s *server) handleCompletion(stream clusterv1.ChunkedSyncService_SyncPartSe
 	if session.metadata != nil && s.metrics != nil {
 		topic := session.metadata.Topic
 		s.metrics.activeSyncSessions.Add(-1, topic)
+		s.metrics.reorderBuffered.Set(0, topic)
 		s.metrics.chunkedSyncTotalBytes.Inc(float64(syncResult.TotalBytesReceived), topic)
 		s.metrics.chunkedSyncDurationSecs.Observe(float64(syncResult.DurationMs)/1000.0, topic)
 

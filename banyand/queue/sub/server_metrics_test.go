@@ -106,7 +106,7 @@ func (f *fakeFactory) NewHistogram(name string, _ meter.Buckets, _ ...string) me
 
 func (*fakeFactory) Close() {}
 
-// TestUpdateChunkOrderMetricsUsesTopicLabel verifies that 
+// TestUpdateChunkOrderMetricsUsesTopicLabel verifies that
 // chunk ordering metrics use the low-cardinality "topic" label.
 func TestUpdateChunkOrderMetricsUsesTopicLabel(t *testing.T) {
 	ff := newFakeFactory()

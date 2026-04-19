@@ -88,12 +88,16 @@ func (bp *batchPublisher) Publish(ctx context.Context, topic bus.Topic, messages
 		topicStr := topic.String()
 		sendData := func() (success bool) {
 			if stream, ok := bp.streams[node]; ok {
+				hasMetrics := bp.pub != nil && bp.pub.metrics != nil
 				defer func() {
 					if !success {
 						delete(bp.streams, node)
+						if hasMetrics {
+							bp.pub.metrics.inflightStreams.Add(-1, node)
+						}
 					}
 				}()
-				if bp.pub != nil && bp.pub.metrics != nil {
+				if hasMetrics {
 					bp.pub.metrics.inflightRequests.Add(1, topicStr, node)
 					defer bp.pub.metrics.inflightRequests.Add(-1, topicStr, node)
 				}
@@ -173,40 +177,40 @@ func (bp *batchPublisher) Publish(ctx context.Context, topic bus.Topic, messages
 		bp.f.events = append(bp.f.events, make(chan batchEvent))
 		_ = sendData()
 		nodeName := node
-		go func(s clusterv1.Service_SendClient, deferFn func(), bc chan batchEvent, curNode string) {
-			defer func() {
-				close(bc)
-				deferFn()
-			}()
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			resp, errRecv := s.Recv()
-			if errRecv != nil {
-				if grpchelper.IsFailoverError(errRecv) {
-					// Record circuit breaker failure before creating failover event
-					bp.pub.connMgr.RecordFailure(curNode, errRecv)
-					bc <- batchEvent{n: curNode, e: common.NewErrorWithStatus(modelv1.Status_STATUS_INTERNAL_ERROR, errRecv.Error())}
-				}
-				return
-			}
-			if resp == nil {
-				return
-			}
-			if resp.Error == "" {
-				return
-			}
-			if isFailoverStatus(resp.Status) {
-				ce := common.NewErrorWithStatus(resp.Status, resp.Error)
-				// Record circuit breaker failure before creating failover event
-				bp.pub.connMgr.RecordFailure(curNode, ce)
-				bc <- batchEvent{n: curNode, e: ce}
-			}
-		}(stream, deferFn, bp.f.events[len(bp.f.events)-1], nodeName)
+		go bp.listenBatchResponse(ctx, stream, deferFn, bp.f.events[len(bp.f.events)-1], nodeName)
 	}
 	return nil, err
+}
+
+// listenBatchResponse receives the server response for a single streaming send and records any failover events.
+func (bp *batchPublisher) listenBatchResponse(ctx context.Context, s clusterv1.Service_SendClient, deferFn func(), bc chan batchEvent, curNode string) {
+	defer func() {
+		close(bc)
+		deferFn()
+	}()
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+	resp, errRecv := s.Recv()
+	if errRecv != nil {
+		if grpchelper.IsFailoverError(errRecv) {
+			// Record circuit breaker failure before creating failover event
+			bp.pub.connMgr.RecordFailure(curNode, errRecv)
+			bc <- batchEvent{n: curNode, e: common.NewErrorWithStatus(modelv1.Status_STATUS_INTERNAL_ERROR, errRecv.Error())}
+		}
+		return
+	}
+	if resp == nil || resp.Error == "" {
+		return
+	}
+	if isFailoverStatus(resp.Status) {
+		ce := common.NewErrorWithStatus(resp.Status, resp.Error)
+		// Record circuit breaker failure before creating failover event
+		bp.pub.connMgr.RecordFailure(curNode, ce)
+		bc <- batchEvent{n: curNode, e: ce}
+	}
 }
 
 func (bp *batchPublisher) Close() (cee map[string]*common.Error, err error) {
@@ -293,9 +297,11 @@ func isFailoverStatus(s modelv1.Status) bool {
 // retrySend implements bounded retries for client streaming sends with exponential backoff and jitter.
 func (bp *batchPublisher) retrySend(ctx context.Context, stream clusterv1.Service_SendClient, r *clusterv1.SendRequest, node string, topic string) error {
 	var lastErr error
-	var start time.Time
 	if bp.pub != nil && bp.pub.metrics != nil {
-		start = time.Now()
+		start := time.Now()
+		defer func() {
+			bp.pub.metrics.sendLatencySeconds.Observe(time.Since(start).Seconds(), topic, node)
+		}()
 	}
 
 	for attempt := 0; attempt <= defaultMaxRetries; attempt++ {
@@ -326,10 +332,8 @@ func (bp *batchPublisher) retrySend(ctx context.Context, stream clusterv1.Servic
 
 		if sendErr == nil {
 			if bp.pub != nil && bp.pub.metrics != nil {
-				elapsed := time.Since(start).Seconds()
 				bp.pub.metrics.sendTotal.Inc(1, topic, node)
 				bp.pub.metrics.sendBytesTotal.Inc(float64(len(r.Body)), topic, node)
-				bp.pub.metrics.sendLatencySeconds.Observe(elapsed, topic, node)
 			}
 			// Success
 			return nil

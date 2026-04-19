@@ -2725,7 +2725,7 @@
               }
             ]
           },
-          "unit": "s"
+          "unit": "short"
         },
         "overrides": []
       },
@@ -2996,6 +2996,19 @@
           "legendFormat": "{{topic}} {{reason}} failed_parts",
           "range": true,
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(banyandb_queue_sub_chunk_reorder_buffered_chunks{job=~\"$job\",pod=~\"$pod\"}) by (topic)",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "{{topic}} reorder_buffered",
+          "range": true,
+          "refId": "C"
         }
       ],
       "title": "Chunked Sync Sessions & Failures",

@@ -427,7 +427,11 @@ func (p *pub) PreRun(context.Context) error {
 		if repo, ok := p.metadata.(repoWithMetrics); ok {
 			if omr := repo.MetricsRegistry(); omr != nil {
 				p.metrics = newPubMetrics(omr.With(queuePubScope))
+			} else {
+				p.log.Warn().Msg("queue_pub metrics disabled: MetricsRegistry returned nil")
 			}
+		} else {
+			p.log.Warn().Msg("queue_pub metrics disabled: metadata does not expose MetricsRegistry")
 		}
 	}
 
