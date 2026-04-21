@@ -36,10 +36,13 @@ Release Notes.
 - Extract shared LocateAll on NodeRegistry to ensure resolveAssignments and syncer GetNodes always produce identical node lists, preventing liaison from enqueuing parts to online/healthy data nodes.
 - Add validation for MATCH and IN conditions in inverted index query builder, and handle nil OR branch when all entities are specific.
 - Fix wrong backup path of schema property.
+- Fix lifecycle migration failure when the target stage has `close: true`.
+- Fix stale sync request blocking watch session channel, causing repeated "channel full, skipping session" errors when a watch stream is in backoff.
 
 ### Chores
 
 - Upgrade Go and npm dependencies including etcd to v3.6.10, OpenTelemetry to v1.43.0, AWS SDK, and Google Cloud libraries.
+- Regenerate expired TLS test certificate with 100-year validity.
 
 ## 0.10.0
 
