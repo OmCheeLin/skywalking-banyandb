@@ -130,6 +130,9 @@ func (s *server) SyncPart(stream clusterv1.ChunkedSyncService_SyncPartServer) er
 		if currentSession != nil {
 			if s.metrics != nil && currentSession.metadata != nil && !currentSession.completed {
 				s.metrics.activeSyncSessions.Add(-1, currentSession.metadata.Topic)
+				if currentSession.chunkBuffer != nil && len(currentSession.chunkBuffer.chunks) > 0 {
+					s.metrics.reorderBuffered.Add(-float64(len(currentSession.chunkBuffer.chunks)), currentSession.metadata.Topic)
+				}
 			}
 			if currentSession.partCtx != nil {
 				if closeErr := currentSession.partCtx.Close(); closeErr != nil {
@@ -161,6 +164,9 @@ func (s *server) SyncPart(stream clusterv1.ChunkedSyncService_SyncPartServer) er
 			if currentSession != nil {
 				if s.metrics != nil && currentSession.metadata != nil {
 					s.metrics.activeSyncSessions.Add(-1, currentSession.metadata.Topic)
+					if currentSession.chunkBuffer != nil && len(currentSession.chunkBuffer.chunks) > 0 {
+						s.metrics.reorderBuffered.Add(-float64(len(currentSession.chunkBuffer.chunks)), currentSession.metadata.Topic)
+					}
 				}
 				if currentSession.partCtx != nil {
 					if currentSession.partCtx.Handler != nil {
@@ -320,7 +326,7 @@ func (s *server) processChunkWithReordering(stream clusterv1.ChunkedSyncService_
 		}
 		if session.metadata != nil && s.metrics != nil {
 			s.updateChunkOrderMetrics("chunk_buffered", session.metadata.Topic)
-			s.metrics.reorderBuffered.Set(float64(len(buffer.chunks)), session.metadata.Topic)
+			s.metrics.reorderBuffered.Add(1, session.metadata.Topic)
 		}
 
 		return s.sendResponse(stream, req, clusterv1.SyncStatus_SYNC_STATUS_CHUNK_RECEIVED,
@@ -444,7 +450,7 @@ func (s *server) processBufferedChunks(stream clusterv1.ChunkedSyncService_SyncP
 			}
 			buffer.expectedIndex++
 			if session.metadata != nil && s.metrics != nil {
-				s.metrics.reorderBuffered.Set(float64(len(buffer.chunks)), session.metadata.Topic)
+				s.metrics.reorderBuffered.Add(-1, session.metadata.Topic)
 			}
 		} else {
 			break
@@ -463,7 +469,6 @@ func (s *server) checkBufferTimeout(session *syncSession) error {
 		if len(session.chunkBuffer.chunks) > 0 {
 			if session.metadata != nil && s.metrics != nil {
 				s.updateChunkOrderMetrics("buffer_timeout", session.metadata.Topic)
-				s.metrics.reorderBuffered.Set(float64(len(session.chunkBuffer.chunks)), session.metadata.Topic)
 			}
 			missing := make([]uint32, 0)
 			for i := session.chunkBuffer.expectedIndex; i < session.chunkBuffer.expectedIndex+10; i++ {
@@ -575,7 +580,9 @@ func (s *server) handleCompletion(stream clusterv1.ChunkedSyncService_SyncPartSe
 	if session.metadata != nil && s.metrics != nil {
 		topic := session.metadata.Topic
 		s.metrics.activeSyncSessions.Add(-1, topic)
-		s.metrics.reorderBuffered.Set(0, topic)
+		if session.chunkBuffer != nil && len(session.chunkBuffer.chunks) > 0 {
+			s.metrics.reorderBuffered.Add(-float64(len(session.chunkBuffer.chunks)), topic)
+		}
 		s.metrics.chunkedSyncTotalBytes.Inc(float64(syncResult.TotalBytesReceived), topic)
 		s.metrics.chunkedSyncDurationSecs.Observe(float64(syncResult.DurationMs)/1000.0, topic)
 
