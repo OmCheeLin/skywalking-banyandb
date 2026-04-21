@@ -161,45 +161,7 @@ func (s *server) SyncPart(stream clusterv1.ChunkedSyncService_SyncPartServer) er
 		sessionID = req.SessionId
 
 		if req.GetMetadata() != nil {
-			if currentSession != nil {
-				if s.metrics != nil && currentSession.metadata != nil {
-					s.metrics.activeSyncSessions.Add(-1, currentSession.metadata.Topic)
-					if currentSession.chunkBuffer != nil && len(currentSession.chunkBuffer.chunks) > 0 {
-						s.metrics.reorderBuffered.Add(-float64(len(currentSession.chunkBuffer.chunks)), currentSession.metadata.Topic)
-					}
-				}
-				if currentSession.partCtx != nil {
-					if currentSession.partCtx.Handler != nil {
-						if finishErr := currentSession.partCtx.Handler.FinishSync(); finishErr != nil {
-							if currentSession.metadata != nil {
-								s.updateChunkOrderMetrics("finish_sync_err", currentSession.metadata.Topic)
-							}
-							s.log.Error().Err(finishErr).Str("session_id", currentSession.sessionID).Msg("failed to finish sync for previous session")
-						}
-						if closeErr := currentSession.partCtx.Close(); closeErr != nil {
-							s.log.Error().Err(closeErr).Str("session_id", currentSession.sessionID).Msg("failed to close previous session partCtx")
-						}
-					} else if closeErr := currentSession.partCtx.Close(); closeErr != nil {
-						s.log.Error().Err(closeErr).Str("session_id", currentSession.sessionID).Msg("failed to close previous session partCtx")
-					}
-				}
-			}
-			currentSession = &syncSession{
-				sessionID:      sessionID,
-				metadata:       req.GetMetadata(),
-				startTime:      time.Now(),
-				chunksReceived: 0,
-				partsProgress:  make(map[int]*partProgress),
-			}
-			if s.metrics != nil {
-				s.metrics.activeSyncSessions.Add(1, currentSession.metadata.Topic)
-			}
-			if dl := s.log.Debug(); dl.Enabled() {
-				dl.Str("session_id", sessionID).
-					Str("topic", req.GetMetadata().Topic).
-					Uint32("total_parts", req.GetMetadata().TotalParts).
-					Msg("started chunked sync session")
-			}
+			currentSession = s.startOrSwitchSession(sessionID, req, currentSession)
 		}
 
 		if currentSession == nil {
@@ -219,6 +181,56 @@ func (s *server) SyncPart(stream clusterv1.ChunkedSyncService_SyncPartServer) er
 	}
 
 	return nil
+}
+
+func (s *server) startOrSwitchSession(sessionID string, req *clusterv1.SyncPartRequest, previousSession *syncSession) *syncSession {
+	if previousSession != nil {
+		s.cleanupPreviousSession(previousSession)
+	}
+
+	newSession := &syncSession{
+		sessionID:      sessionID,
+		metadata:       req.GetMetadata(),
+		startTime:      time.Now(),
+		chunksReceived: 0,
+		partsProgress:  make(map[int]*partProgress),
+	}
+	if s.metrics != nil && newSession.metadata != nil {
+		s.metrics.activeSyncSessions.Add(1, newSession.metadata.Topic)
+	}
+	if dl := s.log.Debug(); dl.Enabled() {
+		dl.Str("session_id", sessionID).
+			Str("topic", req.GetMetadata().Topic).
+			Uint32("total_parts", req.GetMetadata().TotalParts).
+			Msg("started chunked sync session")
+	}
+	return newSession
+}
+
+func (s *server) cleanupPreviousSession(previousSession *syncSession) {
+	if s.metrics != nil && previousSession.metadata != nil && !previousSession.completed {
+		s.metrics.activeSyncSessions.Add(-1, previousSession.metadata.Topic)
+		if previousSession.chunkBuffer != nil && len(previousSession.chunkBuffer.chunks) > 0 {
+			s.metrics.reorderBuffered.Add(-float64(len(previousSession.chunkBuffer.chunks)), previousSession.metadata.Topic)
+		}
+	}
+
+	if previousSession.partCtx == nil {
+		return
+	}
+
+	if previousSession.partCtx.Handler != nil {
+		if finishErr := previousSession.partCtx.Handler.FinishSync(); finishErr != nil {
+			if previousSession.metadata != nil {
+				s.updateChunkOrderMetrics("finish_sync_err", previousSession.metadata.Topic)
+			}
+			s.log.Error().Err(finishErr).Str("session_id", previousSession.sessionID).Msg("failed to finish sync for previous session")
+		}
+	}
+
+	if closeErr := previousSession.partCtx.Close(); closeErr != nil {
+		s.log.Error().Err(closeErr).Str("session_id", previousSession.sessionID).Msg("failed to close previous session partCtx")
+	}
 }
 
 func (s *server) processChunk(stream clusterv1.ChunkedSyncService_SyncPartServer, session *syncSession, req *clusterv1.SyncPartRequest) error {

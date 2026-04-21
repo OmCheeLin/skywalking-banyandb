@@ -299,7 +299,8 @@ The following metrics are exported by the `queue_pub` client on liaison nodes an
 
 - **Send Rate & Error Rate**
 
-  - Successful sends: `sum(rate(banyandb_queue_pub_send_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,node)`
+  - Successful sends (overview): `sum(rate(banyandb_queue_pub_send_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)`
+  - Successful sends (drill-down): `sum(rate(banyandb_queue_pub_send_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,node)`
   - Send errors by reason: `sum(rate(banyandb_queue_pub_send_err_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,node,reason)`
 
   If `send_err_total` keeps increasing for a specific `(topic,node)`, there is likely an issue with writes from liaison to that data node.
