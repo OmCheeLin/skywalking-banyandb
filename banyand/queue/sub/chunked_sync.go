@@ -121,23 +121,33 @@ type partProgress struct {
 	completed     bool
 }
 
+// releaseMetrics releases the gauges held by this session.
+func (s *syncSession) releaseMetrics(m *metrics) {
+	if m == nil || s.metadata == nil || s.completed {
+		return
+	}
+	m.activeSyncSessions.Add(-1, s.metadata.Topic)
+	if s.chunkBuffer != nil {
+		if n := len(s.chunkBuffer.chunks); n > 0 {
+			m.reorderBuffered.Add(-float64(n), s.metadata.Topic)
+		}
+	}
+	s.completed = true
+}
+
 // SyncPart implements clusterv1.ChunkedSyncServiceServer.
 func (s *server) SyncPart(stream clusterv1.ChunkedSyncService_SyncPartServer) error {
 	ctx := stream.Context()
 	var currentSession *syncSession
 	var sessionID string
 	defer func() {
-		if currentSession != nil {
-			if s.metrics != nil && currentSession.metadata != nil && !currentSession.completed {
-				s.metrics.activeSyncSessions.Add(-1, currentSession.metadata.Topic)
-				if currentSession.chunkBuffer != nil && len(currentSession.chunkBuffer.chunks) > 0 {
-					s.metrics.reorderBuffered.Add(-float64(len(currentSession.chunkBuffer.chunks)), currentSession.metadata.Topic)
-				}
-			}
-			if currentSession.partCtx != nil {
-				if closeErr := currentSession.partCtx.Close(); closeErr != nil {
-					s.log.Error().Err(closeErr).Str("session_id", currentSession.sessionID).Msg("failed to close session partCtx")
-				}
+		if currentSession == nil {
+			return
+		}
+		currentSession.releaseMetrics(s.metrics)
+		if currentSession.partCtx != nil {
+			if closeErr := currentSession.partCtx.Close(); closeErr != nil {
+				s.log.Error().Err(closeErr).Str("session_id", currentSession.sessionID).Msg("failed to close session partCtx")
 			}
 		}
 	}()
@@ -208,12 +218,7 @@ func (s *server) startOrSwitchSession(sessionID string, req *clusterv1.SyncPartR
 }
 
 func (s *server) cleanupPreviousSession(previousSession *syncSession) {
-	if s.metrics != nil && previousSession.metadata != nil && !previousSession.completed {
-		s.metrics.activeSyncSessions.Add(-1, previousSession.metadata.Topic)
-		if previousSession.chunkBuffer != nil && len(previousSession.chunkBuffer.chunks) > 0 {
-			s.metrics.reorderBuffered.Add(-float64(len(previousSession.chunkBuffer.chunks)), previousSession.metadata.Topic)
-		}
-	}
+	previousSession.releaseMetrics(s.metrics)
 
 	if previousSession.partCtx == nil {
 		return
@@ -562,8 +567,6 @@ func (s *server) handleCompletion(stream clusterv1.ChunkedSyncService_SyncPartSe
 		session.partCtx.Handler = nil
 	}
 
-	session.completed = true
-
 	partsResults := make([]*clusterv1.PartResult, 0, len(session.partsProgress))
 	allPartsSuccessful := true
 
@@ -589,12 +592,9 @@ func (s *server) handleCompletion(stream clusterv1.ChunkedSyncService_SyncPartSe
 		PartsResults:       partsResults,
 	}
 
-	if session.metadata != nil && s.metrics != nil {
+	session.releaseMetrics(s.metrics)
+	if s.metrics != nil && session.metadata != nil {
 		topic := session.metadata.Topic
-		s.metrics.activeSyncSessions.Add(-1, topic)
-		if session.chunkBuffer != nil && len(session.chunkBuffer.chunks) > 0 {
-			s.metrics.reorderBuffered.Add(-float64(len(session.chunkBuffer.chunks)), topic)
-		}
 		s.metrics.chunkedSyncTotalBytes.Inc(float64(syncResult.TotalBytesReceived), topic)
 		s.metrics.chunkedSyncDurationSecs.Observe(float64(syncResult.DurationMs)/1000.0, topic)
 

@@ -89,7 +89,7 @@ type pub struct {
 }
 
 type pubMetrics struct {
-	sendTotal           meter.Counter
+	sendAttemptsTotal   meter.Counter
 	sendErrTotal        meter.Counter
 	sendBytesTotal      meter.Counter
 	sendDurationSeconds meter.Histogram
@@ -103,7 +103,7 @@ type pubMetrics struct {
 
 func newPubMetrics(factory observability.Factory) *pubMetrics {
 	return &pubMetrics{
-		sendTotal:           factory.NewCounter("send_total", "topic", "node"),
+		sendAttemptsTotal:   factory.NewCounter("send_attempts_total", "topic", "node"),
 		sendErrTotal:        factory.NewCounter("send_err_total", "topic", "node", "reason"),
 		sendBytesTotal:      factory.NewCounter("send_bytes_total", "topic", "node"),
 		sendDurationSeconds: factory.NewHistogram("send_duration_seconds", meter.DefBuckets, "topic", "node"),

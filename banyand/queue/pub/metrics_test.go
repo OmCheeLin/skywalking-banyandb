@@ -80,7 +80,7 @@ func TestRetryMetrics(t *testing.T) {
 			sendRetryExhausted:  &countingCounter{},
 			sendErrTotal:        &countingCounter{},
 			sendBackoffSeconds:  &countingCounter{},
-			sendTotal:           &countingCounter{},
+			sendAttemptsTotal:   &countingCounter{},
 			sendBytesTotal:      &countingCounter{},
 			sendDurationSeconds: &noopHistogram{},
 			inflightStreams:     &noopGauge{},

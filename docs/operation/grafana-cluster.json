@@ -2543,7 +2543,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Per-topic send rate from liaison to data nodes.",
+      "description": "Per-topic local send-attempt rate (frames written to the gRPC stream). End-to-end failures are in Send Errors.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2593,14 +2593,14 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(banyandb_queue_pub_send_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)",
+          "expr": "sum(rate(banyandb_queue_pub_send_attempts_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)",
           "instant": false,
           "legendFormat": "{{topic}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Liaison Queue Send Rate",
+      "title": "Liaison Queue Send Attempts",
       "type": "timeseries"
     },
     {
@@ -2608,7 +2608,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Send errors from liaison to data nodes, grouped by topic and reason.",
+      "description": "Send errors from liaison to data nodes, grouped by topic and reason. Reason values: non_transient, canceled, stream_canceled, retry_exhausted (local); recv_error, server_rejected (remote).",
       "fieldConfig": {
         "defaults": {
           "color": {

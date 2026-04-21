@@ -299,11 +299,17 @@ The following metrics are exported by the `queue_pub` client on liaison nodes an
 
 - **Send Rate & Error Rate**
 
-  - Successful sends (overview): `sum(rate(banyandb_queue_pub_send_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)`
-  - Successful sends (drill-down): `sum(rate(banyandb_queue_pub_send_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,node)`
+  - Send attempts (overview): `sum(rate(banyandb_queue_pub_send_attempts_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)`
+  - Send attempts (drill-down): `sum(rate(banyandb_queue_pub_send_attempts_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,node)`
   - Send errors by reason: `sum(rate(banyandb_queue_pub_send_err_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,node,reason)`
 
-  If `send_err_total` keeps increasing for a specific `(topic,node)`, there is likely an issue with writes from liaison to that data node.
+  `send_attempts_total` counts frames successfully written to the local gRPC stream; it does **not** imply end-to-end delivery. Server-side failures surface on `send_err_total` with the following `reason` labels:
+
+  - `non_transient` / `canceled` / `stream_canceled` / `retry_exhausted`: local errors observed while writing to the stream (see Retries section below).
+  - `recv_error`: `Recv` on the gRPC stream returned an error (connection or protocol layer).
+  - `server_rejected`: the data node replied with a non-empty error (includes failover statuses such as `DISK_FULL` as well as other business errors).
+
+  If `send_err_total{reason=~"recv_error|server_rejected"}` keeps increasing for a specific `(topic,node)` while `send_attempts_total` stays flat or high, writes are reaching the gRPC layer but being rejected by the remote data node.
 
 - **Send Duration**
 
@@ -329,7 +335,11 @@ The following metrics are exported by the `queue_pub` client on liaison nodes an
 #### Common troubleshooting paths (liaison perspective)
 
 - **Symptom: write timeouts or error spikes**
-  - Inspect `banyandb_queue_pub_send_err_total` by `reason` to distinguish `non_transient` (logic/config errors) from `retry_exhausted` (remote side unavailable).
+  - Inspect `banyandb_queue_pub_send_err_total` by `reason`:
+    - `non_transient` → logic/config errors on the client side.
+    - `retry_exhausted` → remote side unavailable (transient errors kept failing).
+    - `recv_error` → connection/protocol-level error from the data node (network, TLS, or gRPC-level issues).
+    - `server_rejected` → the data node explicitly rejected the write (e.g., `DISK_FULL`). Cross-check data node disk status and logs.
   - Check `send_retry_attempts_total` and `send_backoff_seconds_total`. If they keep increasing, the problem is usually with data node health or networking.
 
 - **Symptom: chunked sync sessions never finish**
