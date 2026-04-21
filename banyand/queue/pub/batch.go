@@ -202,6 +202,7 @@ func (bp *batchPublisher) listenBatchResponse(ctx context.Context, s clusterv1.S
 		return
 	default:
 	}
+
 	resp, errRecv := s.Recv()
 	if errRecv != nil {
 		if grpchelper.IsFailoverError(errRecv) {
