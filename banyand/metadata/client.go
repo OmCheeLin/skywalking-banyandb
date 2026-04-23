@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -87,6 +88,7 @@ type clientService struct {
 	propertySchemaClientCACert        string
 	dnsCACertPaths                    []string
 	dnsSRVAddresses                   []string
+	omrMu                             sync.RWMutex
 	registryTimeout                   time.Duration
 	dnsFetchInitInterval              time.Duration
 	dnsFetchInitDuration              time.Duration
@@ -241,7 +243,7 @@ func (s *clientService) PreRun(ctx context.Context) error {
 	if s.nodeDiscoveryMode == NodeDiscoveryModeDNS {
 		l.Info().Strs("srv-addresses", s.dnsSRVAddresses).Msg("Initializing DNS-based node discovery")
 		dnsSvc, createErr := dns.NewService(dns.Config{
-			OMR:          s.omr,
+			OMR:          s.MetricsRegistry(),
 			SRVAddresses: s.dnsSRVAddresses,
 			InitInterval: s.dnsFetchInitInterval,
 			InitDuration: s.dnsFetchInitDuration,
@@ -258,7 +260,7 @@ func (s *clientService) PreRun(ctx context.Context) error {
 	if s.nodeDiscoveryMode == NodeDiscoveryModeFile {
 		l.Info().Str("file-path", s.filePath).Msg("Initializing file-based node discovery")
 		fileSvc, createErr := file.NewService(file.Config{
-			OMR:                  s.omr,
+			OMR:                  s.MetricsRegistry(),
 			FilePath:             s.filePath,
 			GRPCTimeout:          s.grpcTimeout,
 			FetchInterval:        s.fileFetchInterval,
@@ -312,7 +314,7 @@ func (s *clientService) initPropertySchemaRegistry(ctx context.Context, l *logge
 		GRPCTimeout:         s.grpcTimeout,
 		SyncInterval:        s.propertySchemaSyncInterval,
 		HealthCheckInterval: s.propertySchemaHealthCheckInterval,
-		OMR:                 s.omr,
+		OMR:                 s.MetricsRegistry(),
 		CurNode:             currentNode,
 		NodeRegistry:        s.NodeRegistry(),
 		MaxRecvMsgSize:      int(s.propertySchemaMaxRecvSize),
@@ -411,11 +413,15 @@ func (s *clientService) PropertyRegistry() schema.Property {
 }
 
 func (s *clientService) SetMetricsRegistry(omr observability.MetricsRegistry) {
+	s.omrMu.Lock()
+	defer s.omrMu.Unlock()
 	s.omr = omr
 }
 
 // MetricsRegistry returns the associated metrics registry.
 func (s *clientService) MetricsRegistry() observability.MetricsRegistry {
+	s.omrMu.RLock()
+	defer s.omrMu.RUnlock()
 	return s.omr
 }
 

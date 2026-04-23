@@ -332,9 +332,15 @@ func (bp *batchPublisher) retrySend(ctx context.Context, stream clusterv1.Servic
 		select {
 		case <-ctx.Done():
 			cancel()
+			if bp.hasMetrics() {
+				bp.pub.metrics.sendErrTotal.Inc(1, topic, node, sendErrReasonCanceled)
+			}
 			return ctx.Err()
 		case <-stream.Context().Done():
 			cancel()
+			if bp.hasMetrics() {
+				bp.pub.metrics.sendErrTotal.Inc(1, topic, node, sendErrReasonStreamCanceled)
+			}
 			return stream.Context().Err()
 		case <-attemptCtx.Done():
 			cancel()
