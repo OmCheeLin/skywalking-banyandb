@@ -20,7 +20,6 @@ Release Notes.
   - The `--schema-registry-mode` flag only accepts `property`.
 - Add end-to-end observability for liaison internal queue pipelines (per-topic metrics for chunked sync and queue publisher, plus Grafana panels and troubleshooting docs), and replace high-cardinality `session_id` label with `topic` on chunk-ordering metrics.
 
-
 ### Bug Fixes
 
 - Fix flaky trace query filtering caused by non-deterministic sidx tag ordering and add consistency checks for integration query cases.
