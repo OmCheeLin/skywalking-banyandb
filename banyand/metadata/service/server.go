@@ -24,7 +24,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/apache/skywalking-banyandb/api/common"
@@ -59,7 +58,6 @@ type server struct {
 	closer             *run.Closer
 	schemaRegistryMode string
 	nodeDiscoveryMode  string
-	omrMu              sync.RWMutex
 	hasMetaRole        bool
 }
 
@@ -190,16 +188,12 @@ func NewService() (Service, error) {
 
 // SetMetricsRegistry stores the metrics registry for lazy propServer creation.
 func (s *server) SetMetricsRegistry(omr observability.MetricsRegistry) {
-	s.omrMu.Lock()
 	s.omr = omr
-	s.omrMu.Unlock()
 	s.Service.SetMetricsRegistry(omr)
 }
 
 // MetricsRegistry returns the associated metrics registry.
 func (s *server) MetricsRegistry() observability.MetricsRegistry {
-	s.omrMu.RLock()
-	defer s.omrMu.RUnlock()
 	return s.omr
 }
 

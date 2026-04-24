@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -88,7 +87,6 @@ type clientService struct {
 	propertySchemaClientCACert        string
 	dnsCACertPaths                    []string
 	dnsSRVAddresses                   []string
-	omrMu                             sync.RWMutex
 	registryTimeout                   time.Duration
 	dnsFetchInitInterval              time.Duration
 	dnsFetchInitDuration              time.Duration
@@ -413,15 +411,11 @@ func (s *clientService) PropertyRegistry() schema.Property {
 }
 
 func (s *clientService) SetMetricsRegistry(omr observability.MetricsRegistry) {
-	s.omrMu.Lock()
-	defer s.omrMu.Unlock()
 	s.omr = omr
 }
 
 // MetricsRegistry returns the associated metrics registry.
 func (s *clientService) MetricsRegistry() observability.MetricsRegistry {
-	s.omrMu.RLock()
-	defer s.omrMu.RUnlock()
 	return s.omr
 }
 

@@ -41,10 +41,14 @@ const (
 	defaultBackoffBase       = 500 * time.Millisecond
 	defaultBackoffMax        = 30 * time.Second
 
+	// Local send-side failures (before the frame leaves the publisher).
 	sendErrReasonNonTransient   = "non_transient"
 	sendErrReasonCanceled       = "canceled"
 	sendErrReasonStreamCanceled = "stream_canceled"
 	sendErrReasonRetryExhausted = "retry_exhausted"
+	// Remote-side failures (observed after the frame was written to the stream).
+	// TODO sendErrReasonRecvError      = "recv_error"      // s.Recv returned an error (connection/protocol layer).
+	// TODO sendErrReasonServerRejected = "server_rejected" // Server responded with a non-empty Error (includes failover statuses).
 )
 
 type writeStream struct {
@@ -182,6 +186,7 @@ func (bp *batchPublisher) Publish(ctx context.Context, topic bus.Topic, messages
 		bp.f.events = append(bp.f.events, make(chan batchEvent))
 		_ = sendData()
 		nodeName := node
+		// TODO go bp.listenBatchResponse(ctx, stream, deferFn, bp.f.events[len(bp.f.events)-1], nodeName, topicStr).
 		go bp.listenBatchResponse(ctx, stream, deferFn, bp.f.events[len(bp.f.events)-1], nodeName)
 	}
 	return nil, err
@@ -192,6 +197,7 @@ func (bp *batchPublisher) hasMetrics() bool {
 }
 
 // listenBatchResponse receives the server response for a single streaming send and records any failover events.
+// TODO func (bp *batchPublisher) listenBatchResponse(ctx context.Context, s clusterv1.Service_SendClient, deferFn func(), bc chan batchEvent, curNode, topic string).
 func (bp *batchPublisher) listenBatchResponse(ctx context.Context, s clusterv1.Service_SendClient, deferFn func(), bc chan batchEvent, curNode string) {
 	defer func() {
 		close(bc)
@@ -205,6 +211,9 @@ func (bp *batchPublisher) listenBatchResponse(ctx context.Context, s clusterv1.S
 
 	resp, errRecv := s.Recv()
 	if errRecv != nil {
+		// TODO if bp.hasMetrics() {
+		// TODO	bp.pub.metrics.sendErrTotal.Inc(1, topic, curNode, sendErrReasonRecvError)
+		// TODO }
 		if grpchelper.IsFailoverError(errRecv) {
 			// Record circuit breaker failure before creating failover event
 			bp.pub.connMgr.RecordFailure(curNode, errRecv)
@@ -215,6 +224,9 @@ func (bp *batchPublisher) listenBatchResponse(ctx context.Context, s clusterv1.S
 	if resp == nil || resp.Error == "" {
 		return
 	}
+	// TODO if bp.hasMetrics() {
+	// TODO bp.pub.metrics.sendErrTotal.Inc(1, topic, curNode, sendErrReasonServerRejected)
+	// TODO }
 	if isFailoverStatus(resp.Status) {
 		ce := common.NewErrorWithStatus(resp.Status, resp.Error)
 		// Record circuit breaker failure before creating failover event
@@ -322,9 +334,15 @@ func (bp *batchPublisher) retrySend(ctx context.Context, stream clusterv1.Servic
 		select {
 		case <-ctx.Done():
 			cancel()
+			// TODO if bp.hasMetrics() {
+			// TODO bp.pub.metrics.sendErrTotal.Inc(1, topic, node, sendErrReasonCanceled)
+			// TODO }
 			return ctx.Err()
 		case <-stream.Context().Done():
 			cancel()
+			// TODO if bp.hasMetrics() {
+			// TODO	bp.pub.metrics.sendErrTotal.Inc(1, topic, node, sendErrReasonStreamCanceled)
+			// TODO }
 			return stream.Context().Err()
 		case <-attemptCtx.Done():
 			cancel()
