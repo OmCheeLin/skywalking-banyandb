@@ -24,6 +24,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apache/skywalking-banyandb/api/common"
@@ -58,6 +59,7 @@ type server struct {
 	closer             *run.Closer
 	schemaRegistryMode string
 	nodeDiscoveryMode  string
+	omrMu              sync.RWMutex
 	hasMetaRole        bool
 }
 
@@ -81,7 +83,7 @@ func (s *server) FlagSet() *run.FlagSet {
 	fs.BoolVar(&s.hasMetaRole, "has-meta-role", true,
 		"Whether this data node runs the schema server. Only effective in property schema registry mode.")
 	if s.propServer == nil {
-		omr := s.omr
+		omr := s.MetricsRegistry()
 		if omr == nil {
 			omr = observability.BypassRegistry
 		}
@@ -188,8 +190,17 @@ func NewService() (Service, error) {
 
 // SetMetricsRegistry stores the metrics registry for lazy propServer creation.
 func (s *server) SetMetricsRegistry(omr observability.MetricsRegistry) {
+	s.omrMu.Lock()
 	s.omr = omr
+	s.omrMu.Unlock()
 	s.Service.SetMetricsRegistry(omr)
+}
+
+// MetricsRegistry returns the associated metrics registry.
+func (s *server) MetricsRegistry() observability.MetricsRegistry {
+	s.omrMu.RLock()
+	defer s.omrMu.RUnlock()
+	return s.omr
 }
 
 // GetSchemaServerPort returns the schema server gRPC port.

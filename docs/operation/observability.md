@@ -258,6 +258,100 @@ If the value is too large, it may indicate that too many data points are being i
 
 **Expression**: `sum(banyandb_stream_tst_inverted_index_total_doc_count{job=~\"$job\",instance=~\"$instance\"}) by (group)`
 
+### Liaison Queue and Chunked Sync
+
+`Liaison Queue` metrics are used to observe the internal queue and chunked sync behavior on liaison nodes. They help identify congestion, backoff, and failures along the liaison→data write path.
+
+#### Chunked Sync (queue_sub) metrics
+
+The following metrics are exported by the internal `queue_sub` service on liaison nodes and are aggregated by `topic`:
+
+- **Active Sessions**
+
+  The number of chunked sync sessions that are currently in progress.
+
+  **Expression**: `sum(banyandb_queue_sub_chunked_sync_active_sessions{job=~\"$job\",pod=~\"$pod\"}) by (topic)`
+
+- **Reorder Buffer Depth**
+
+  The total number of chunks buffered for out-of-order handling, aggregated by `topic`. If this value stays close to the configured `max-chunk-buffer-size`, it may indicate severe out-of-order delivery or packet loss.
+
+  **Expression**: `sum(banyandb_queue_sub_chunk_reorder_buffered_chunks{job=~\"$job\",pod=~\"$pod\"}) by (topic)`
+
+- **Failed Parts**
+
+  The number of failed parts in chunked sync, grouped by `reason` (for example, `error` or `incomplete`). This metric helps distinguish between logical errors and incomplete data.
+
+  **Expression**: `sum(rate(banyandb_queue_sub_chunked_sync_failed_parts_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,reason)`
+
+- **Total Bytes & Duration**
+
+  The total bytes received and the duration (in seconds) of each chunked sync session. These metrics help identify long-tail or abnormally slow large sync operations.
+
+  **Expressions**:
+
+  - Bytes: `sum(rate(banyandb_queue_sub_chunked_sync_total_bytes_received{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)`
+  - Duration (average): `sum(rate(banyandb_queue_sub_chunked_sync_duration_seconds_sum{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic) / sum(rate(banyandb_queue_sub_chunked_sync_duration_seconds_count{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)`
+
+#### Liaison Queue Client (queue_pub) metrics
+
+The following metrics are exported by the `queue_pub` client on liaison nodes and describe liaison→data write behavior and retries:
+
+- **Send Rate & Error Rate**
+
+  - Send attempts (overview): `sum(rate(banyandb_queue_pub_send_attempts_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)`
+  - Send attempts (drill-down): `sum(rate(banyandb_queue_pub_send_attempts_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,node)`
+  - Send errors by reason: `sum(rate(banyandb_queue_pub_send_err_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,node,reason)`
+
+  `send_attempts_total` counts frames successfully written to the local gRPC stream; it does **not** imply end-to-end delivery. Server-side failures surface on `send_err_total` with the following `reason` labels:
+
+  - `non_transient` / `canceled` / `stream_canceled` / `retry_exhausted`: local errors observed while writing to the stream (see Retries section below).
+  - `recv_error`: `Recv` on the gRPC stream returned an error (connection or protocol layer).
+  - `server_rejected`: the data node replied with a non-empty error (includes failover statuses such as `DISK_FULL` as well as other business errors).
+
+  If `send_err_total{reason=~"recv_error|server_rejected"}` keeps increasing for a specific `(topic,node)` while `send_attempts_total` stays flat or high, writes are reaching the gRPC layer but being rejected by the remote data node.
+
+- **Send Duration**
+
+  End-to-end send duration (including retries and backoff). You can compute percentiles from the histogram:
+
+  **Expression (p95)**: `histogram_quantile(0.95, sum(rate(banyandb_queue_pub_send_duration_seconds_bucket{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (le,topic,node))`
+
+- **Retries & Backoff**
+
+  - Retry attempts: `sum(rate(banyandb_queue_pub_send_retry_attempts_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,node)`
+  - Retry exhaustion: `sum(rate(banyandb_queue_pub_send_retry_exhausted_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,node)`
+  - Total backoff time: `sum(rate(banyandb_queue_pub_send_backoff_seconds_total{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic,node)`
+
+  If retries and backoff time are high while the send success rate is low, the target data nodes are likely unavailable or overloaded.
+
+- **Inflight Streams & Requests**
+
+  - Current active gRPC streams: `max(banyandb_queue_pub_inflight_streams{job=~\"$job\",pod=~\"$pod\"}) by (node)`
+  - Current inflight requests: `max(banyandb_queue_pub_inflight_requests{job=~\"$job\",pod=~\"$pod\"}) by (topic,node)`
+
+  If inflight requests remain high while send rate drops, liaison may be blocked on the send path (for example, the remote side is not consuming, the network is unstable, or the protocol layer is stalled).
+
+#### Common troubleshooting paths (liaison perspective)
+
+- **Symptom: write timeouts or error spikes**
+  - Inspect `banyandb_queue_pub_send_err_total` by `reason`:
+    - `non_transient` → logic/config errors on the client side.
+    - `retry_exhausted` → remote side unavailable (transient errors kept failing).
+    - `recv_error` → connection/protocol-level error from the data node (network, TLS, or gRPC-level issues).
+    - `server_rejected` → the data node explicitly rejected the write (e.g., `DISK_FULL`). Cross-check data node disk status and logs.
+  - Check `send_retry_attempts_total` and `send_backoff_seconds_total`. If they keep increasing, the problem is usually with data node health or networking.
+
+- **Symptom: chunked sync sessions never finish**
+  - Look at `chunked_sync_active_sessions` for the affected `topic`. A sustained high value suggests stuck sessions.
+  - Check `chunk_reorder_buffered_chunks` and related events such as `buffer_timeouts`, `large_gaps_rejected`, and `buffer_capacity_exceeded` to see if out-of-order or missing chunks are the cause.
+
+- **Symptom: some parts are missing or incomplete**
+  - Aggregate `chunked_sync_failed_parts_total` by `(topic,reason)` to see whether many parts fail with `reason="error"` or `reason="incomplete"`.
+  - Cross-check data node logs and disk status (see the disk management and common issues documents) to rule out disk-full or I/O problems.
+
+By combining these metrics, you can localize bottlenecks in the liaison internal queue and chunked sync pipeline under both pressure and failure scenarios.
+
 ## Metrics Providers
 
 BanyanDB has built-in support for metrics collection. Currently, there are two supported metrics provider: `prometheus` and `native`. These can be enabled through `observability-modes` flag, allowing you to activate one or both of them.

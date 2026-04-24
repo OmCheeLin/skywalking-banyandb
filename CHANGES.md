@@ -19,6 +19,8 @@ Release Notes.
   - The `--namespace` CLI flag has been removed (it previously configured the etcd key prefix).
   - The `--node-discovery-mode` flag no longer accepts `etcd` (supported values: `none`, `dns`, `file`). 
   - The `--schema-registry-mode` flag only accepts `property`.
+- Add end-to-end observability for liaison internal queue pipelines (per-topic metrics for chunked sync and queue publisher, plus Grafana panels and troubleshooting docs), and replace high-cardinality `session_id` label with `topic` on chunk-ordering metrics.
+
 
 ### Bug Fixes
 
