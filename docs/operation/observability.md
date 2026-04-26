@@ -80,6 +80,27 @@ The active instances is the number of active instances in the BanyanDB cluster.
 
 **Expression**: `sum(min_over_time(up{job=~\"$job\", instance=~\"$instance\"}[$__rate_interval])) by (job)`
 
+### Liaison `queue_sub` chunked sync (chunk ordering)
+
+On liaison nodes, the internal `queue_sub` service exports counters for **chunked sync ordering** (out-of-order chunks, buffer pressure, gap rejects, and finish errors). These series use the **`topic` label** (the bus topic from sync metadata). They intentionally do **not** use `session_id` as a label: session identifiers are per-sync UUIDs and would cause unbounded Prometheus cardinality. Use structured logs (`session_id` fields) to correlate a metric spike with a specific sync.
+
+Counters (all under the `banyandb_queue_sub_*` namespace):
+
+| Metric | Meaning |
+|--------|---------|
+| `banyandb_queue_sub_out_of_order_chunks_received` | Out-of-order chunk observed (before buffer/gap handling). |
+| `banyandb_queue_sub_chunks_buffered` | Chunk stored in reorder buffer. |
+| `banyandb_queue_sub_buffer_timeouts` | Reorder buffer timed out waiting for missing chunks. |
+| `banyandb_queue_sub_large_gaps_rejected` | Gap between expected and received index exceeded `max-chunk-gap-size`. |
+| `banyandb_queue_sub_buffer_capacity_exceeded` | Reorder buffer full. |
+| `banyandb_queue_sub_finish_sync_err` | `FinishSync` failed when switching sessions. |
+
+Example (rate per topic, align with the cluster dashboard variables):
+
+**Expression (out-of-order rate by topic)**: `sum(rate(banyandb_queue_sub_out_of_order_chunks_received{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])) by (topic)`
+
+**Expression (buffer full rate by topic)**: `sum(rate(banyandb_queue_sub_buffer_capacity_exceeded{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])) by (topic)`
+
 ### Resource Usage
 
 `Resource Usage` metrics are used to monitor the resource usage of BanyanDB on the node. The following metrics are available:
