@@ -253,6 +253,10 @@ func (s *server) processChunkSequential(stream clusterv1.ChunkedSyncService_Sync
 
 func (s *server) processChunkWithReordering(stream clusterv1.ChunkedSyncService_SyncPartServer, session *syncSession, req *clusterv1.SyncPartRequest) error {
 	buffer := session.chunkBuffer
+	// must check buffer timeout before refreshing lastActivity, otherwise it will never timeout.
+	if err := s.checkBufferTimeout(session); err != nil {
+		return err
+	}
 	buffer.lastActivity = time.Now()
 
 	if req.ChunkIndex == buffer.expectedIndex {
@@ -444,7 +448,7 @@ func (s *server) checkBufferTimeout(session *syncSession) error {
 					missing = append(missing, i)
 				}
 			}
-
+			s.updateChunkOrderMetrics("buffer_timeout", session.metadata.Topic)
 			return fmt.Errorf("buffer timeout: missing chunks %v after %v",
 				missing, session.chunkBuffer.bufferTimeout)
 		}
