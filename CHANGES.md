@@ -19,9 +19,22 @@ Release Notes.
   - The `--namespace` CLI flag has been removed (it previously configured the etcd key prefix).
   - The `--node-discovery-mode` flag no longer accepts `etcd` (supported values: `none`, `dns`, `file`). 
   - The `--schema-registry-mode` flag only accepts `property`.
+- Schema consistency (Phase 1): introduce client-observable revision and propagation primitives. All gates are opt-in and zero-valued requests preserve prior behavior.
+  - Add `mod_revision` to Group / IndexRule / IndexRuleBinding / TopNAggregation Create and Update responses.
+  - Add `delete_time` to all `*ServiceDeleteResponse` messages so clients can observe tombstones.
+  - Add `created_at` to Stream / Measure / Trace / Property / IndexRule / IndexRuleBinding / TopNAggregation / Group; preserved across updates.
+  - Add `STATUS_SCHEMA_NOT_APPLIED` (10) for writes/queries whose `mod_revision` is ahead of the server cache.
+  - Add three-way write-path `ModRevision` gate on Stream and Measure write RPCs (`<` expired, `==` succeed, `>` not-applied, `0` skipped).
+  - Add per-group query-path gate via `QueryRequest.group_mod_revisions` and `QueryResponse.group_statuses` for Stream / Measure / Trace queries.
+  - Add automatic time-range clamp `max(time_range.start, schema.created_at)`; multi-group uses the maximum across queried groups; nil for pre-upgrade schemas is a no-op.
+  - Add `SchemaBarrierService` with `AwaitRevisionApplied`, `AwaitSchemaApplied`, `AwaitSchemaDeleted` (10 000-key cap, timeout-bounded, returns laggards on expiry).
+  - Add tombstone retention/GC (default 7 days, configurable via `--schema-server-tombstone-retention`) with a per-cache count cap to bound memory under bulk deletes.
+  - Reject `Create` with `updated_at <= tombstone.delete_time` to prevent replayed creates from overwriting newer deletes.
+  - Guard `pkg/schema/cache` against out-of-order `EventDelete` events; expose monotonic `LatestModRevision` watermark.
 
 ### Bug Fixes
 
+- Use `topic` instead of `session_id` as the Prometheus label on liaison `queue_sub` chunk-ordering counters to avoid unbounded metric cardinality.
 - Fix flaky trace query filtering caused by non-deterministic sidx tag ordering and add consistency checks for integration query cases.
 - Fix index-mode measure queries returning documents outside the requested time range when a widened segment overlaps the query window.
 - MCP: Add validation for properties and harden the mcp server.
@@ -41,6 +54,8 @@ Release Notes.
 - Fix stale sync request blocking watch session channel, causing repeated "channel full, skipping session" errors when a watch stream is in backoff.
 - Fix nil pointer panic in disk monitor when group schema is not yet initialized during early startup, and ensure monitor loop survives recovered panics.
 - Fix `FileSystemError` not satisfying `errors.Is(err, io/fs.ErrNotExist)`, which prevented the segment controller from cleaning up half-born segment directories and left groups in a permanent zombie state after a crash or partial sync.
+- Fix lifecycle migration panic when a stream shard's snapshot has no element index (`idx/`) directory.
+- Avoid FODC lifecycle inspection failing on busy data nodes by raising the per-broadcast `CollectDataInfo` / `CollectLiaisonInfo` deadline from 5s to 30s and parallelizing per-group inspection in the cluster-internal `InspectAll`.
 
 ### Chores
 

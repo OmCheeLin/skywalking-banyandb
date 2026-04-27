@@ -2524,6 +2524,185 @@
       ],
       "title": "Total Documents",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 63
+      },
+      "id": 29,
+      "panels": [],
+      "title": "Liaison queue_sub chunked sync ($pod)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Chunked sync ordering signals from liaison internal queue_sub. All series use the `topic` label (sync metadata topic), not `session_id`, to keep cardinality bounded. Correlate with logs via `session_id` fields.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "cps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 64
+      },
+      "id": 30,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "sortBy": "Last *",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(banyandb_queue_sub_out_of_order_chunks_received{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "out_of_order {{topic}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(banyandb_queue_sub_chunks_buffered{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "chunk_buffered {{topic}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(banyandb_queue_sub_buffer_timeouts{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "buffer_timeout {{topic}}",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(banyandb_queue_sub_large_gaps_rejected{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "gap_rejected {{topic}}",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(banyandb_queue_sub_buffer_capacity_exceeded{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "buffer_full {{topic}}",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(banyandb_queue_sub_finish_sync_err{job=~\"$job\",pod=~\"$pod\"}[$__rate_interval])) by (topic)",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "finish_sync_err {{topic}}",
+          "range": true,
+          "refId": "F"
+        }
+      ],
+      "title": "Chunk ordering events (rate by topic)",
+      "type": "timeseries"
     }
   ],
   "schemaVersion": 39,
@@ -2587,6 +2766,6 @@
   "timezone": "browser",
   "title": "BanyanDB Cluster",
   "uid": "ddy81kbj931mof",
-  "version": 19,
+  "version": 20,
   "weekStart": ""
 }
