@@ -57,6 +57,7 @@ Release Notes.
 - Fix lifecycle migration panic when a stream shard's snapshot has no element index (`idx/`) directory.
 - Avoid FODC lifecycle inspection failing on busy data nodes by raising the per-broadcast `CollectDataInfo` / `CollectLiaisonInfo` deadline from 5s to 30s and parallelizing per-group inspection in the cluster-internal `InspectAll`.
 - Fix flaky `file_snapshot` subtest in measure/stream/trace by waiting until every introduced mem part has been flushed to disk, instead of only checking the latest snapshot creator.
+- Fix deadlock when fodc-agent reconnects to fodc-proxy after a pod rotation.
 - Fix flaky `TestCollectWithPartialClosedSegments` by raising `SegmentIdleTimeout` so wall-clock variance on slow CI does not mark still-open segments as idle.
 
 ### Chores
