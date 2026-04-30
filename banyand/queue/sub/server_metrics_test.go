@@ -126,11 +126,7 @@ func TestCompletionOutcomeMetricsRecorded(t *testing.T) {
 	s.metrics.chunkedSyncDurationSecs.Observe(float64(syncResult.DurationMs)/1000.0, topic)
 	for _, pr := range partsResults {
 		if !pr.Success {
-			reason := failedReasonIncomplete
-			if pr.Error != "" {
-				reason = failedReasonError
-			}
-			s.metrics.chunkedSyncFailedParts.Inc(1, topic, reason)
+			s.metrics.chunkedSyncFailedParts.Inc(1, topic)
 		}
 	}
 

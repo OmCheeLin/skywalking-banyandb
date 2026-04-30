@@ -590,11 +590,7 @@ func (s *server) handleCompletion(stream clusterv1.ChunkedSyncService_SyncPartSe
 
 		for _, pr := range partsResults {
 			if !pr.Success {
-				reason := failedReasonIncomplete
-				if pr.Error != "" {
-					reason = failedReasonError
-				}
-				s.metrics.chunkedSyncFailedParts.Inc(1, topic, reason)
+				s.metrics.chunkedSyncFailedParts.Inc(1, topic)
 			}
 		}
 	}

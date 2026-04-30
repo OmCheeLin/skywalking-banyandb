@@ -59,12 +59,7 @@ import (
 	pkgtls "github.com/apache/skywalking-banyandb/pkg/tls"
 )
 
-const (
-	defaultRecvSize = 10 << 20
-
-	failedReasonIncomplete = "incomplete"
-	failedReasonError      = "error"
-)
+const defaultRecvSize = 10 << 20
 
 var (
 	errServerCert = errors.New("invalid server cert file")
@@ -461,7 +456,7 @@ func newMetrics(factory observability.Factory) *metrics {
 		reorderBuffered:    factory.NewGauge("chunk_reorder_buffered_chunks", "topic"),
 
 		// Chunked sync outcome metrics
-		chunkedSyncFailedParts:  factory.NewCounter("chunked_sync_failed_parts_total", "topic", "reason"),
+		chunkedSyncFailedParts:  factory.NewCounter("chunked_sync_failed_parts_total", "topic"),
 		chunkedSyncTotalBytes:   factory.NewCounter("chunked_sync_total_bytes_received", "topic"),
 		chunkedSyncDurationSecs: factory.NewHistogram("chunked_sync_duration_seconds", meter.DefBuckets, "topic"),
 	}
