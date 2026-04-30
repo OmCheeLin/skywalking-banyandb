@@ -427,6 +427,7 @@ type metrics struct {
 	reorderBuffered    meter.Gauge
 
 	// Chunked sync outcome metrics
+	chunkedSyncAbortedTotal meter.Counter
 	chunkedSyncFailedParts  meter.Counter
 	chunkedSyncTotalBytes   meter.Counter
 	chunkedSyncDurationSecs meter.Histogram
@@ -456,6 +457,7 @@ func newMetrics(factory observability.Factory) *metrics {
 		reorderBuffered:    factory.NewGauge("chunk_reorder_buffered_chunks", "topic"),
 
 		// Chunked sync outcome metrics
+		chunkedSyncAbortedTotal: factory.NewCounter("chunked_sync_aborted_total", "topic", "reason"),
 		chunkedSyncFailedParts:  factory.NewCounter("chunked_sync_failed_parts_total", "topic"),
 		chunkedSyncTotalBytes:   factory.NewCounter("chunked_sync_total_bytes_received", "topic"),
 		chunkedSyncDurationSecs: factory.NewHistogram("chunked_sync_duration_seconds", meter.DefBuckets, "topic"),

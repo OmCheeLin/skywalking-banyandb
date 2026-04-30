@@ -24,8 +24,58 @@ import (
 	"github.com/stretchr/testify/require"
 
 	clusterv1 "github.com/apache/skywalking-banyandb/api/proto/banyandb/cluster/v1"
+	"github.com/apache/skywalking-banyandb/banyand/queue"
+	"github.com/apache/skywalking-banyandb/pkg/logger"
 	"github.com/apache/skywalking-banyandb/pkg/meter"
 )
+
+type noopCounter struct{}
+
+func (*noopCounter) Inc(_ float64, _ ...string) {}
+func (*noopCounter) Delete(_ ...string) bool    { return true }
+
+type noopGauge struct{}
+
+func (*noopGauge) Set(_ float64, _ ...string) {}
+func (*noopGauge) Add(_ float64, _ ...string) {}
+func (*noopGauge) Delete(_ ...string) bool    { return true }
+
+type noopHistogram struct{}
+
+func (*noopHistogram) Observe(_ float64, _ ...string) {}
+func (*noopHistogram) Delete(_ ...string) bool        { return true }
+
+func newTestMetrics() *metrics {
+	c := &noopCounter{}
+	g := &noopGauge{}
+	h := &noopHistogram{}
+	return &metrics{
+		totalStarted:  c,
+		totalFinished: c,
+		totalErr:      c,
+		totalLatency:  c,
+
+		totalMsgReceived:    c,
+		totalMsgReceivedErr: c,
+		totalMsgSent:        c,
+		totalMsgSentErr:     c,
+
+		outOfOrderChunksReceived: c,
+		chunksBuffered:           c,
+		bufferTimeouts:           c,
+		largeGapsRejected:        c,
+		bufferCapacityExceeded:   c,
+		finishSyncErr:            c,
+
+		activeSyncSessions: g,
+		reorderBuffered:    g,
+
+		chunkedSyncAbortedTotal: c,
+		chunkedSyncFailedParts:  c,
+		chunkedSyncTotalBytes:   c,
+		chunkedSyncDurationSecs: h,
+	}
+}
 
 type fakeCounter struct {
 	total float64
@@ -84,10 +134,21 @@ func TestReleaseMetricsReleasesGauges(t *testing.T) {
 }
 
 func TestCompletionOutcomeMetricsRecorded(t *testing.T) {
+	logInitErr := logger.Init(logger.Logging{
+		Env:   "dev",
+		Level: "info",
+	})
+	require.NoError(t, logInitErr)
+
+	topic := "v1:stream-part-sync"
+	totalBytes := float64(10)
+
 	s := &server{
+		log: logger.GetLogger("test-server-completion-metrics"),
 		metrics: &metrics{
 			activeSyncSessions:      newFakeGauge(),
 			reorderBuffered:         newFakeGauge(),
+			chunkedSyncAbortedTotal: &fakeCounter{},
 			chunkedSyncFailedParts:  &fakeCounter{},
 			chunkedSyncTotalBytes:   &fakeCounter{},
 			chunkedSyncDurationSecs: &fakeHistogram{},
@@ -97,7 +158,8 @@ func TestCompletionOutcomeMetricsRecorded(t *testing.T) {
 	session := &syncSession{
 		sessionID: "s1",
 		startTime: time.Now().Add(-2 * time.Second),
-		metadata:  &clusterv1.SyncMetadata{Topic: "v1:stream-part-sync"},
+		metadata:  &clusterv1.SyncMetadata{Topic: topic},
+		partCtx:   &queue.ChunkedSyncPartContext{},
 		partsProgress: map[int]*partProgress{
 			0: {totalBytes: 10, receivedBytes: 10, completed: true},
 			1: {totalBytes: 10, receivedBytes: 0, completed: false},
@@ -106,29 +168,54 @@ func TestCompletionOutcomeMetricsRecorded(t *testing.T) {
 		chunksReceived: 2,
 	}
 
-	// Directly simulate the tail of handleCompletion logic:
-	partsResults := []*clusterv1.PartResult{
-		{Success: true, Error: "", BytesProcessed: 10},
-		{Success: false, Error: "some error", BytesProcessed: 0},
-	}
-	syncResult := &clusterv1.SyncResult{
-		Success:            false,
-		TotalBytesReceived: session.totalReceived,
-		DurationMs:         time.Since(session.startTime).Milliseconds(),
-		ChunksReceived:     session.chunksReceived,
-		PartsReceived:      uint32(len(session.partsProgress)),
-		PartsResults:       partsResults,
-	}
+	// Simulate start increments that would have happened on session creation.
+	s.metrics.activeSyncSessions.Add(1, topic)
 
-	session.releaseMetrics(s.metrics)
-	topic := session.metadata.Topic
-	s.metrics.chunkedSyncTotalBytes.Inc(float64(syncResult.TotalBytesReceived), topic)
-	s.metrics.chunkedSyncDurationSecs.Observe(float64(syncResult.DurationMs)/1000.0, topic)
-	for _, pr := range partsResults {
-		if !pr.Success {
-			s.metrics.chunkedSyncFailedParts.Inc(1, topic)
-		}
+	mockStream := &MockSyncPartStream{}
+	req := &clusterv1.SyncPartRequest{
+		SessionId:  session.sessionID,
+		ChunkIndex: 0,
+		Content: &clusterv1.SyncPartRequest_Completion{
+			Completion: &clusterv1.SyncCompletion{},
+		},
 	}
+	handleErr := s.handleCompletion(mockStream, session, req)
+	require.NoError(t, handleErr)
 
+	require.Equal(t, totalBytes, s.metrics.chunkedSyncTotalBytes.(*fakeCounter).total)
+	require.Equal(t, 1, s.metrics.chunkedSyncDurationSecs.(*fakeHistogram).count)
+	require.Equal(t, float64(1), s.metrics.chunkedSyncFailedParts.(*fakeCounter).total)
+	require.Equal(t, float64(0), getGaugeValue(s.metrics.activeSyncSessions))
 	require.True(t, session.completed)
+}
+
+func TestCleanupPreviousSessionRecordsAborted(t *testing.T) {
+	logInitErr := logger.Init(logger.Logging{
+		Env:   "dev",
+		Level: "info",
+	})
+	require.NoError(t, logInitErr)
+
+	topic := "v1:stream-part-sync"
+	s := &server{
+		log: logger.GetLogger("test-server-switch-abort"),
+		metrics: &metrics{
+			activeSyncSessions:      newFakeGauge(),
+			reorderBuffered:         newFakeGauge(),
+			chunkedSyncAbortedTotal: &fakeCounter{},
+		},
+	}
+
+	prev := &syncSession{
+		sessionID: "s1",
+		startTime: time.Now().Add(-time.Second),
+		metadata:  &clusterv1.SyncMetadata{Topic: topic},
+	}
+	s.metrics.activeSyncSessions.Add(1, topic)
+
+	s.cleanupPreviousSession(prev)
+
+	require.True(t, prev.abortedRecorded)
+	require.Equal(t, float64(1), s.metrics.chunkedSyncAbortedTotal.(*fakeCounter).total)
+	require.Equal(t, float64(0), getGaugeValue(s.metrics.activeSyncSessions))
 }

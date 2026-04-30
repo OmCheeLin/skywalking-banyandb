@@ -103,16 +103,17 @@ type chunkBuffer struct {
 }
 
 type syncSession struct {
-	startTime      time.Time
-	metadata       *clusterv1.SyncMetadata
-	partsProgress  map[int]*partProgress
-	partCtx        *queue.ChunkedSyncPartContext
-	chunkBuffer    *chunkBuffer
-	sessionID      string
-	errorMsg       string
-	totalReceived  uint64
-	chunksReceived uint32
-	completed      bool
+	startTime       time.Time
+	metadata        *clusterv1.SyncMetadata
+	partsProgress   map[int]*partProgress
+	partCtx         *queue.ChunkedSyncPartContext
+	chunkBuffer     *chunkBuffer
+	sessionID       string
+	errorMsg        string
+	totalReceived   uint64
+	chunksReceived  uint32
+	abortedRecorded bool
+	completed       bool
 }
 
 type partProgress struct {
@@ -121,7 +122,15 @@ type partProgress struct {
 	completed     bool
 }
 
+const (
+	abortedReasonSwitch      = "switch"
+	abortedReasonStreamError = "stream_error"
+	abortedReasonCtxDone     = "ctx_done"
+	abortedReasonEOF         = "eof"
+)
+
 // releaseMetrics releases the gauges held by this session.
+// Idempotent: safe to call from both handleCompletion and the SyncPart defer.
 func (s *syncSession) releaseMetrics(m *metrics) {
 	if m == nil || s.completed {
 		return
@@ -135,14 +144,30 @@ func (s *syncSession) releaseMetrics(m *metrics) {
 	s.completed = true
 }
 
+func (s *syncSession) recordAborted(m *metrics, reason string) {
+	if m == nil || s.abortedRecorded || s.completed {
+		return
+	}
+	if reason == "" {
+		return
+	}
+	// chunkedSyncAbortedTotal is always initialized in production; tests that wire partial metrics must set it if they trigger abort paths.
+	m.chunkedSyncAbortedTotal.Inc(1, s.metadata.Topic, reason)
+	s.abortedRecorded = true
+}
+
 // SyncPart implements clusterv1.ChunkedSyncServiceServer.
 func (s *server) SyncPart(stream clusterv1.ChunkedSyncService_SyncPartServer) error {
 	ctx := stream.Context()
 	var currentSession *syncSession
 	var sessionID string
+	var abortReason string
 	defer func() {
 		if currentSession == nil {
 			return
+		}
+		if !currentSession.completed {
+			currentSession.recordAborted(s.metrics, abortReason)
 		}
 		currentSession.releaseMetrics(s.metrics)
 		if currentSession.partCtx != nil {
@@ -155,15 +180,18 @@ func (s *server) SyncPart(stream clusterv1.ChunkedSyncService_SyncPartServer) er
 	for {
 		select {
 		case <-ctx.Done():
+			abortReason = abortedReasonCtxDone
 			return ctx.Err()
 		default:
 		}
 
 		req, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
+			abortReason = abortedReasonEOF
 			break
 		}
 		if err != nil {
+			abortReason = abortedReasonStreamError
 			s.log.Error().Err(err).Msg("failed to receive chunk")
 			return err
 		}
@@ -218,6 +246,9 @@ func (s *server) startOrSwitchSession(sessionID string, req *clusterv1.SyncPartR
 }
 
 func (s *server) cleanupPreviousSession(previousSession *syncSession) {
+	if !previousSession.completed {
+		previousSession.recordAborted(s.metrics, abortedReasonSwitch)
+	}
 	previousSession.releaseMetrics(s.metrics)
 
 	if previousSession.partCtx == nil {

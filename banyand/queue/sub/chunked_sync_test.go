@@ -224,14 +224,6 @@ func (c *capturingCounter) uniqueFirstLabelValues() map[string]struct{} {
 	return m
 }
 
-type noopGauge struct{}
-
-func (*noopGauge) Set(_ float64, _ ...string) {}
-
-func (*noopGauge) Add(_ float64, _ ...string) {}
-
-func (*noopGauge) Delete(_ ...string) bool { return true }
-
 func TestChunkOrderingMetricsAreLabeledByTopic_NotSessionID(t *testing.T) {
 	// enable reordering, otherwise the chunk-ordering metrics will not be triggered.
 	s := &server{
@@ -248,13 +240,10 @@ func TestChunkOrderingMetricsAreLabeledByTopic_NotSessionID(t *testing.T) {
 
 	outOfOrder := &capturingCounter{}
 	buffered := &capturingCounter{}
-	reorderBuffered := &noopGauge{}
-	s.metrics = &metrics{
-		outOfOrderChunksReceived: outOfOrder,
-		chunksBuffered:           buffered,
-		reorderBuffered:          reorderBuffered,
-		// other counters will not be triggered in this test, leave them nil
-	}
+	testMetrics := newTestMetrics()
+	testMetrics.outOfOrderChunksReceived = outOfOrder
+	testMetrics.chunksBuffered = buffered
+	s.metrics = testMetrics
 
 	topic := data.TopicStreamPartSync.String()
 
